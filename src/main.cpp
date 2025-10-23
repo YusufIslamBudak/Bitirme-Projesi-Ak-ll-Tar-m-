@@ -16,6 +16,12 @@
 // Servo motor pin tanimlamasi
 #define SERVO_PIN 9   // Kapak servo motoru D9'a bagli
 
+// Role (Sulama pompasi) pin tanimlamasi
+#define PUMP_RELAY_PIN 10  // Sulama pompasi role D10'a bagli
+
+// Analog Pin tanimlari
+#define SOIL_MOISTURE_PIN A0  // MH Water Sensor (Toprak nem sensoru)
+
 // Sensor nesneleri
 BH1750 lightMeter;
 Adafruit_BME680 bme;
@@ -35,22 +41,42 @@ unsigned long mhz14aStartTime = 0;  // Baslangic zamani
 bool mhz14aReady = false;            // Sensor hazir mi?
 #define MHZ14A_WARMUP_TIME 180000    // 3 dakika (180000 ms)
 
+// Toprak nem sensoru kalibrasyonu
+#define SOIL_WET_VALUE 300      // Su icinde (tamamen islak)
+#define SOIL_DRY_VALUE 1023     // Havada (tamamen kuru)
+int soilMoistureRaw = 0;        // Ham analog deger
+float soilMoisturePercent = 0;  // Yuzde cinsinden nem
+
 // Global degiskenler - Sera Kontrol
 int currentRoofPosition = 0;         // Mevcut kapak pozisyonu (0=kapali, 100=tamamen acik)
 unsigned long lastRoofAction = 0;    // Son kapak hareketi zamani
 #define ROOF_ACTION_DELAY 30000      // Kapak hareketleri arasi minimum 30 saniye
 String lastRoofReason = "System Start"; // Son kapak hareketi sebebi
 
+// Global degiskenler - Sulama Kontrol
+bool isPumpOn = false;                      // Pompa durumu
+unsigned long pumpStartTime = 0;            // Pompa acilma zamani
+unsigned long lastIrrigationCheck = 0;      // Son sulama kontrolu
+#define IRRIGATION_CHECK_INTERVAL 10000     // Her 10 saniyede sulama kontrolu
+#define IRRIGATION_LOCKOUT_TIME 600000      // Sulama sonrasi 10 dakika bekleme
+unsigned long irrigationLockoutUntil = 0;   // Sulama kilidi bitiş zamani
+int irrigationDuration = 0;                 // Sulama suresi (saniye)
+String lastIrrigationReason = "System Start"; // Son sulama sebebi
+
 // Fonksiyon prototipleri
 void initSensors();
 void readBH1750();
 void readBME680();
 void readMHZ14A();
+void readSoilMoisture();
 int getMHZ14ACO2();
 void printSensorData();
 void controlGreenhouse();
+void controlIrrigation();
 void setRoofPosition(int position, String reason);
+void setPumpState(bool state, int duration, String reason);
 int checkGreenhouseConditions();
+bool checkIrrigationNeeded();
 
 // Bilimsel hesaplama fonksiyonlari
 float calculateDewPoint(float temp, float humidity);
@@ -68,8 +94,8 @@ void setup() {
     delay(10);
   }
   
-  Serial.println(F("=== Multi-Sensor System Test ==="));
-  Serial.println(F("BH1750 (Light) + BME680 (Air) + MH-Z14A (CO2)"));
+  Serial.println(F("=== Akilli Tarim Sistemi ==="));
+  Serial.println(F("BH1750 (Isik) + BME680 (Hava) + MH-Z14A (CO2) + Toprak Nem"));
   Serial.println();
   
   // I2C haberlesme baslat
@@ -83,6 +109,12 @@ void setup() {
   
   // Sensorleri baslat
   initSensors();
+  
+  // Role (sulama pompasi) pin ayari
+  pinMode(PUMP_RELAY_PIN, OUTPUT);
+  digitalWrite(PUMP_RELAY_PIN, LOW);  // Baslangicta pompa kapali
+  Serial.println(F("Sulama pompasi rolesi baslatildi"));
+  Serial.println(F("Pompa durumu: KAPALI"));
   
   // Servo motor baslat (servo baglaninca yorum satirini kaldir)
   // roofServo.attach(SERVO_PIN);
@@ -99,7 +131,7 @@ void loop() {
     unsigned long elapsedTime = millis() - mhz14aStartTime;
     if (elapsedTime >= MHZ14A_WARMUP_TIME) {
       mhz14aReady = true;
-      Serial.println(F("\n*** MH-Z14A warm-up complete! ***\n"));
+      Serial.println(F("\n*** MH-Z14A isinma tamamlandi! ***\n"));
     }
   }
   
@@ -110,44 +142,48 @@ void loop() {
   Serial.print(F("[H"));  // Imleci en uste getir
   
   // Her 2 saniyede bir sensorleri oku
-  Serial.println(F("\n--- New Reading ---"));
+  Serial.println(F("\n--- Yeni Okuma ---"));
   
   readBH1750();
   readBME680();
   readMHZ14A();
+  readSoilMoisture();
   
-  // Sera kontrol sistemi
+  // Sera kontrol
   controlGreenhouse();
+  
+  // Sulama kontrol
+  controlIrrigation();
   
   printSensorData();
   
-  delay(2000);
+  delay(5000);  // 5 saniye bekle
 }
 
 // Sensorleri baslatma fonksiyonu
 void initSensors() {
-  Serial.println(F("Sensors initializing..."));
+  Serial.println(F("Sensorler baslatiliyor..."));
   
   // BH1750 isik sensoru baslat
   if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
-    Serial.println(F("OK BH1750 started successfully"));
+    Serial.println(F("OK BH1750 basariyla baslatildi"));
   } else {
-    Serial.println(F("ERROR BH1750 failed! Check I2C connection."));
-    Serial.println(F("  Default address: 0x23 or 0x5C"));
+    Serial.println(F("HATA BH1750 baslamadi! I2C baglantisini kontrol edin."));
+    Serial.println(F("  Varsayilan adres: 0x23 veya 0x5C"));
   }
   
   // BME680 sensoru baslat - Once 0x77, sonra 0x76 dene
   bool bme680Found = false;
   
-  Serial.println(F("Trying BME680 at 0x77..."));
+  Serial.println(F("BME680 0x77 adresinde deneniyor..."));
   if (bme.begin(0x77, &Wire)) {
-    Serial.println(F("OK BME680 found at address 0x77"));
+    Serial.println(F("OK BME680 0x77 adresinde bulundu"));
     bme680Found = true;
   } else {
-    Serial.println(F("Not found at 0x77, trying 0x76..."));
+    Serial.println(F("0x77'de bulunamadi, 0x76 deneniyor..."));
     delay(100);
     if (bme.begin(0x76, &Wire)) {
-      Serial.println(F("OK BME680 found at address 0x76"));
+      Serial.println(F("OK BME680 0x76 adresinde bulundu"));
       bme680Found = true;
     }
   }
@@ -160,34 +196,34 @@ void initSensors() {
     bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
     bme.setGasHeater(320, 150); // 320°C, 150 ms
     
-    Serial.println(F("  BME680 parameters configured"));
+    Serial.println(F("  BME680 parametreleri ayarlandi"));
     
     // Ilk okuma - sensoru hazirla
     delay(100);
     bme.performReading();
   } else {
-    Serial.println(F("ERROR BME680 not found! Check I2C connection."));
-    Serial.println(F("  Possible address: 0x76 or 0x77"));
+    Serial.println(F("HATA BME680 bulunamadi! I2C baglantisini kontrol edin."));
+    Serial.println(F("  Olasi adres: 0x76 veya 0x77"));
   }
   
   // MH-Z14A CO2 sensoru test
-  Serial.println(F("Testing MH-Z14A CO2 sensor..."));
+  Serial.println(F("MH-Z14A CO2 sensoru test ediliyor..."));
   Serial.println(F("  UART: Serial1 (9600 baud)"));
   Serial.println(F("  Arduino RX1 (D19) -> MH-Z14A TX"));
   Serial.println(F("  Arduino TX1 (D18) -> MH-Z14A RX"));
-  Serial.println(F("  *** WARM-UP TIME: 3-5 minutes ***"));
-  Serial.println(F("  *** Initial readings may be inaccurate ***"));
+  Serial.println(F("  *** ISINMA SURESI: 3-5 dakika ***"));
+  Serial.println(F("  *** Ilk okumalar yanlis olabilir ***"));
   
   // Ilk okuma (sicak acma gecikmesi)
   delay(100);
   int testCO2 = getMHZ14ACO2();
   if (testCO2 > 0 && testCO2 < 5000) {
-    Serial.print(F("OK MH-Z14A responding. CO2: "));
+    Serial.print(F("OK MH-Z14A yanit veriyor. CO2: "));
     Serial.print(testCO2);
     Serial.println(F(" ppm"));
   } else {
-    Serial.println(F("WARNING MH-Z14A not responding properly"));
-    Serial.println(F("  Check: UART connection, power, sensor warm-up"));
+    Serial.println(F("UYARI MH-Z14A dogru yanit vermiyor"));
+    Serial.println(F("  Kontrol: UART baglantisi, guc, sensor isinmasi"));
   }
   
   Serial.println();
@@ -197,34 +233,34 @@ void initSensors() {
 void readBH1750() {
   float lux = lightMeter.readLightLevel();
   
-  Serial.println(F("--- GY-30 (BH1750) Light Sensor ---"));
+  Serial.println(F("--- GY-30 (BH1750) Isik Sensoru ---"));
   
   if (lux < 0) {
-    Serial.println(F("Error: BH1750 read failed!"));
+    Serial.println(F("Hata: BH1750 okunamadi!"));
   } else {
-    Serial.print(F("Light Level: "));
+    Serial.print(F("Isik Siddeti: "));
     Serial.print(lux);
     Serial.println(F(" lux"));
     
     // Foot-candles donusumu
     float fc = luxToFootCandles(lux);
-    Serial.print(F("Light Level: "));
+    Serial.print(F("Isik Siddeti: "));
     Serial.print(fc, 2);
     Serial.println(F(" fc (foot-candles)"));
     
     // Isik seviyesi yorumlama
     if (lux < 1) {
-      Serial.println(F("  -> Dark"));
+      Serial.println(F("  -> Karanlik"));
     } else if (lux < 10) {
-      Serial.println(F("  -> Very Dim"));
+      Serial.println(F("  -> Cok Los"));
     } else if (lux < 50) {
-      Serial.println(F("  -> Dim"));
+      Serial.println(F("  -> Los"));
     } else if (lux < 200) {
-      Serial.println(F("  -> Medium"));
+      Serial.println(F("  -> Orta"));
     } else if (lux < 1000) {
-      Serial.println(F("  -> Bright"));
+      Serial.println(F("  -> Parlak"));
     } else {
-      Serial.println(F("  -> Very Bright"));
+      Serial.println(F("  -> Cok Parlak"));
     }
   }
   Serial.println();
@@ -232,11 +268,11 @@ void readBH1750() {
 
 // BME680 sensorunu okuma fonksiyonu
 void readBME680() {
-  Serial.println(F("--- BME680 Air Quality Sensor ---"));
+  Serial.println(F("--- BME680 Hava Kalitesi Sensoru ---"));
   
   if (!bme.performReading()) {
-    Serial.println(F("Error: BME680 reading failed!"));
-    Serial.println(F("Check: sensor connection, I2C address, power"));
+    Serial.println(F("Hata: BME680 okunamadi!"));
+    Serial.println(F("Kontrol: sensor baglantisi, I2C adresi, guc"));
     return;
   }
   
@@ -246,69 +282,69 @@ void readBME680() {
   float gasResistance = bme.gas_resistance / 1000.0;
   
   // Ham veriler
-  Serial.println(F("--- Raw Measurements ---"));
-  Serial.print(F("Temperature: "));
+  Serial.println(F("--- Ham Olcumler ---"));
+  Serial.print(F("Sicaklik: "));
   Serial.print(temp, 2);
   Serial.println(F(" C"));
   
-  Serial.print(F("Pressure: "));
+  Serial.print(F("Basinc: "));
   Serial.print(pressure, 2);
   Serial.println(F(" hPa"));
   
-  Serial.print(F("Humidity: "));
+  Serial.print(F("Nem: "));
   Serial.print(humidity, 2);
   Serial.println(F(" %"));
   
-  Serial.print(F("Gas Resistance: "));
+  Serial.print(F("Gaz Direnci: "));
   Serial.print(gasResistance, 2);
   Serial.println(F(" KOhm"));
   
   // Bilimsel hesaplamalar
-  Serial.println(F("--- Calculated Values ---"));
+  Serial.println(F("--- Hesaplanan Degerler ---"));
   
   // Ciy noktasi
   float dewPoint = calculateDewPoint(temp, humidity);
-  Serial.print(F("Dew Point: "));
+  Serial.print(F("Ciy Noktasi: "));
   Serial.print(dewPoint, 2);
   Serial.println(F(" C"));
   
   // Mutlak nem
   float absHumidity = calculateAbsoluteHumidity(temp, humidity);
-  Serial.print(F("Absolute Humidity: "));
+  Serial.print(F("Mutlak Nem: "));
   Serial.print(absHumidity, 2);
   Serial.println(F(" g/m3"));
   
   // Hissedilen sicaklik
   float heatIndex = calculateHeatIndex(temp, humidity);
-  Serial.print(F("Heat Index (Feels Like): "));
+  Serial.print(F("Hissedilen Sicaklik: "));
   Serial.print(heatIndex, 2);
   Serial.println(F(" C"));
   
   // Buhar basinci
   float vaporPressure = calculateVaporPressure(temp, humidity);
-  Serial.print(F("Vapor Pressure: "));
+  Serial.print(F("Buhar Basinci: "));
   Serial.print(vaporPressure, 3);
   Serial.println(F(" kPa"));
   
   // Deniz seviyesi basinci
   float altitude = bme.readAltitude(SEALEVELPRESSURE_HPA);
   float seaLevelPressure = calculateSeaLevelPressure(pressure, altitude, temp);
-  Serial.print(F("Sea Level Pressure: "));
+  Serial.print(F("Deniz Seviyesi Basinci: "));
   Serial.print(seaLevelPressure, 2);
   Serial.println(F(" hPa"));
   
-  Serial.print(F("Altitude: "));
+  Serial.print(F("Yukseklik: "));
   Serial.print(altitude, 2);
   Serial.println(F(" m"));
   
   // Hava kalitesi yorumu (gaz direncine gore)
-  Serial.print(F("Air Quality: "));
+  Serial.print(F("Hava Kalitesi: "));
   if (gasResistance > 50) {
-    Serial.println(F("Good"));
+    Serial.println(F("Iyi"));
   } else if (gasResistance > 20) {
-    Serial.println(F("Moderate"));
+    Serial.println(F("Orta"));
   } else {
-    Serial.println(F("Poor"));
+    Serial.println(F("Kotu"));
   }
   
   Serial.println();
@@ -316,47 +352,47 @@ void readBME680() {
 
 // MH-Z14A CO2 sensorunu okuma fonksiyonu
 void readMHZ14A() {
-  Serial.println(F("--- MH-Z14A CO2 Sensor ---"));
+  Serial.println(F("--- MH-Z14A CO2 Sensoru ---"));
   
   // Isinma durumu kontrolu
   if (!mhz14aReady) {
     unsigned long elapsedTime = millis() - mhz14aStartTime;
     unsigned long remainingTime = (MHZ14A_WARMUP_TIME - elapsedTime) / 1000;
     
-    Serial.print(F("Status: WARMING UP ("));
+    Serial.print(F("Durum: ISINMA SURECI ("));
     Serial.print(remainingTime);
-    Serial.println(F(" seconds remaining)"));
-    Serial.println(F("Readings may be inaccurate..."));
+    Serial.println(F(" saniye kaldi)"));
+    Serial.println(F("Okumalar yanlis olabilir..."));
   }
   
   co2ppm = getMHZ14ACO2();
   
   if (co2ppm > 0) {
-    Serial.println(F("--- Raw Measurements ---"));
-    Serial.print(F("CO2 Level: "));
+    Serial.println(F("--- Ham Olcumler ---"));
+    Serial.print(F("CO2 Seviyesi: "));
     Serial.print(co2ppm);
     Serial.println(F(" ppm"));
     
     // 5000 ppm hata kontrolu
     if (co2ppm == 5000) {
-      Serial.println(F("  -> SENSOR NOT READY (warm-up in progress)"));
+      Serial.println(F("  -> SENSOR HAZIR DEGIL (isinma devam ediyor)"));
     } else if (co2ppm > 5000) {
-      Serial.println(F("  -> ERROR: Invalid reading"));
+      Serial.println(F("  -> HATA: Gecersiz okuma"));
     } else {
-      Serial.print(F("Sensor Temp: "));
+      Serial.print(F("Sensor Sicakligi: "));
       Serial.print(co2Temperature);
       Serial.println(F(" C"));
       
       // Bilimsel hesaplamalar - BME680 verilerini kullan
       if (bme.temperature > 0) {
-        Serial.println(F("--- Calculated Values ---"));
+        Serial.println(F("--- Hesaplanan Degerler ---"));
         
         float temp = bme.temperature;
         float pressure = bme.pressure / 100.0;
         
         // CO2 konsantrasyonu mg/m3
         float co2MgPerM3 = co2PpmToMgPerM3(co2ppm, temp, pressure);
-        Serial.print(F("CO2 Concentration: "));
+        Serial.print(F("CO2 Yogunlugu: "));
         Serial.print(co2MgPerM3, 2);
         Serial.println(F(" mg/m3"));
         
@@ -364,35 +400,76 @@ void readMHZ14A() {
         // 1000 ppm'in ustunde kisi basina 10 L/s havalandirma
         if (co2ppm > 1000) {
           float ventilationRate = (co2ppm - 400) / 60.0; // L/s/person yaklasik
-          Serial.print(F("Recommended Ventilation: "));
+          Serial.print(F("Onerilen Havalandirma: "));
           Serial.print(ventilationRate, 1);
-          Serial.println(F(" L/s per person"));
+          Serial.println(F(" L/s kisi basina"));
         }
       }
       
       // CO2 seviyesi yorumlama - sadece sensor hazirsa
       if (mhz14aReady) {
-        Serial.print(F("Air Quality: "));
+        Serial.print(F("Hava Kalitesi: "));
         if (co2ppm < 400) {
-          Serial.println(F("ERROR - Too Low (Check sensor)"));
+          Serial.println(F("HATA - Cok Dusuk (Sensoru kontrol edin)"));
         } else if (co2ppm < 800) {
-          Serial.println(F("Excellent"));
+          Serial.println(F("Mukemmel"));
         } else if (co2ppm < 1000) {
-          Serial.println(F("Good"));
+          Serial.println(F("Iyi"));
         } else if (co2ppm < 1500) {
-          Serial.println(F("Moderate"));
+          Serial.println(F("Orta"));
         } else if (co2ppm < 2000) {
-          Serial.println(F("Poor"));
+          Serial.println(F("Kotu"));
         } else {
-          Serial.println(F("Very Poor - Ventilation Needed!"));
+          Serial.println(F("Cok Kotu - Havalandirma Gerekli!"));
         }
       } else {
-        Serial.println(F("Air Quality: WARMING UP - wait for stable reading"));
+        Serial.println(F("Hava Kalitesi: ISINMA - Kararli okuma bekleniyor"));
       }
     }
   } else {
-    Serial.println(F("Error: MH-Z14A read failed!"));
-    Serial.println(F("Check: UART connection, sensor power"));
+    Serial.println(F("Hata: MH-Z14A okunamadi!"));
+    Serial.println(F("Kontrol: UART baglantisi, sensor gucu"));
+  }
+  
+  Serial.println();
+}
+
+// Toprak nem sensorunu okuma fonksiyonu
+void readSoilMoisture() {
+  Serial.println(F("--- MH Water Sensor (Soil Moisture) ---"));
+  
+  // Analog deger oku (0-1023)
+  soilMoistureRaw = analogRead(SOIL_MOISTURE_PIN);
+  
+  // Yuzdeye donustur (0-100%)
+  // Not: Deger ters orantili (dusuk deger = yuksek nem)
+  soilMoisturePercent = map(soilMoistureRaw, SOIL_DRY_VALUE, SOIL_WET_VALUE, 0, 100);
+  
+  // Sinir kontrolu
+  if (soilMoisturePercent < 0) soilMoisturePercent = 0;
+  if (soilMoisturePercent > 100) soilMoisturePercent = 100;
+  
+  // Ham deger
+  Serial.print(F("Raw Analog Value: "));
+  Serial.println(soilMoistureRaw);
+  
+  // Yuzde
+  Serial.print(F("Soil Moisture: "));
+  Serial.print(soilMoisturePercent, 1);
+  Serial.println(F(" %"));
+  
+  // Durum yorumlama
+  Serial.print(F("Soil Condition: "));
+  if (soilMoisturePercent < 20) {
+    Serial.println(F("Very Dry - Urgent irrigation needed!"));
+  } else if (soilMoisturePercent < 40) {
+    Serial.println(F("Dry - Irrigation recommended"));
+  } else if (soilMoisturePercent < 60) {
+    Serial.println(F("Optimal - Good moisture level"));
+  } else if (soilMoisturePercent < 80) {
+    Serial.println(F("Moist - Adequate moisture"));
+  } else {
+    Serial.println(F("Very Wet - Risk of overwatering!"));
   }
   
   Serial.println();
@@ -451,15 +528,199 @@ void printSensorData() {
   Serial.println(F("================================="));
   Serial.print(F("Uptime: "));
   Serial.print(millis() / 1000);
-  Serial.println(F(" seconds"));
+  Serial.println(F(" saniye"));
   
   // Sera durumu
-  Serial.print(F("Greenhouse Roof: "));
+  Serial.print(F("Sera Kapagi: "));
   Serial.print(currentRoofPosition);
   Serial.print(F("% - "));
   Serial.println(lastRoofReason);
   
+  // Sulama durumu
+  Serial.print(F("Sulama Pompasi: "));
+  if (isPumpOn) {
+    unsigned long elapsedTime = (millis() - pumpStartTime) / 1000;
+    Serial.print(F("ACIK ("));
+    Serial.print(elapsedTime);
+    Serial.print(F("/"));
+    Serial.print(irrigationDuration);
+    Serial.println(F(" sn)"));
+  } else {
+    Serial.print(F("KAPALI - "));
+    Serial.println(lastIrrigationReason);
+  }
+  
   Serial.println(F("================================="));
+}
+
+// ========================================
+// SULAMA KONTROL FONKSIYONLARI
+// ========================================
+
+// Sulama sistemini kontrol et
+void controlIrrigation() {
+  // Pompa aciksa, sure kontrolu yap
+  if (isPumpOn) {
+    unsigned long elapsedTime = millis() - pumpStartTime;
+    if (elapsedTime >= (irrigationDuration * 1000)) {
+      // Sulama suresi doldu, pompayı kapat
+      setPumpState(false, 0, "Irrigation duration completed");
+      irrigationLockoutUntil = millis() + IRRIGATION_LOCKOUT_TIME;
+    }
+    return; // Pompa acikken baska kontrol yapma
+  }
+  
+  // Sulama kilidi aktifse kontrol yapma
+  if (millis() < irrigationLockoutUntil) {
+    return;
+  }
+  
+  // Yeterli zaman gecmis mi?
+  if (millis() - lastIrrigationCheck < IRRIGATION_CHECK_INTERVAL) {
+    return;
+  }
+  
+  lastIrrigationCheck = millis();
+  
+  // Sulama gerekli mi kontrol et
+  if (checkIrrigationNeeded()) {
+    // checkIrrigationNeeded() icerisinde setPumpState() cagrildi
+    irrigationLockoutUntil = millis() + IRRIGATION_LOCKOUT_TIME;
+  }
+}
+
+// Sulama gereksinimi kontrolu
+bool checkIrrigationNeeded() {
+  float temp = bme.temperature;
+  float humidity = bme.humidity;
+  float pressure = bme.pressure / 100.0;
+  float lux = lightMeter.readLightLevel();
+  
+  // ============================================
+  // SULAMA KODU 5: ASIRI SULAMA KORUMASI
+  // ============================================
+  if (soilMoisturePercent > 90.0) {
+    lastIrrigationReason = "SULAMA-5: ASIRI SULAMA KORUMASI! 24 saat kilitledi";
+    irrigationLockoutUntil = millis() + 86400000; // 24 saat
+    // Ek aksiyon: Sera kapagini ac (kuruma icin)
+    if (currentRoofPosition < 75) {
+      setRoofPosition(75, "Toprak cok islak - kurutma gerekli");
+    }
+    return false;
+  }
+  
+  // ============================================
+  // SULAMA KODU 7: GECE SULAMA YASAGI
+  // ============================================
+  if (lux < 50.0 && temp < 12.0) {
+    lastIrrigationReason = "SULAMA-7: GECE YASAGI. Soguk koruma";
+    return false;
+  }
+  
+  // ============================================
+  // SULAMA KODU 4: YAGMUR IPTALI
+  // ============================================
+  if ((pressure < 990.0 && humidity > 85.0) || soilMoisturePercent > 80.0) {
+    lastIrrigationReason = "SULAMA-4: YAGMUR IPTALI. Dogal nem";
+    return false;
+  }
+  
+  // ============================================
+  // SULAMA KODU 6: KUF RISKI
+  // ============================================
+  if (soilMoisturePercent > 80.0 && humidity > 85.0 && temp < 22.0) {
+    lastIrrigationReason = "SULAMA-6: KUF RISKI. Sulama durdur";
+    // Ek aksiyon: Havalandirma
+    if (currentRoofPosition < 40) {
+      setRoofPosition(40, "Kuf riski - havalandirma");
+    }
+    return false;
+  }
+  
+  // ============================================
+  // SULAMA KODU 1: ACIL SULAMA
+  // ============================================
+  if (soilMoisturePercent < 20.0 && temp > 28.0) {
+    setPumpState(true, 30, "SULAMA-1: ACIL! Kuru toprak + Yuksek sicaklik");
+    // Ek aksiyon: Sera kapagini ac (buharlaşma kontrolu)
+    if (currentRoofPosition < 50) {
+      setRoofPosition(50, "Sulama aktif - buharlasma kontrolu");
+    }
+    return true;
+  }
+  
+  // ============================================
+  // SULAMA KODU 3: AKSAM SULAMA (OPTIMAL)
+  // ============================================
+  if (soilMoisturePercent < 50.0 && lux < 1000.0 && temp > 15.0) {
+    setPumpState(true, 25, "SULAMA-3: AKSAM SULAMA. Optimal zaman");
+    return true;
+  }
+  
+  // ============================================
+  // SULAMA KODU 2: NORMAL SULAMA
+  // ============================================
+  if (soilMoisturePercent < 40.0 && temp > 20.0 && lux > 1000.0) {
+    setPumpState(true, 20, "SULAMA-2: NORMAL SULAMA. Gunduz");
+    return true;
+  }
+  
+  // ============================================
+  // SULAMA KODU 8: IDEAL DURUM
+  // ============================================
+  if (soilMoisturePercent >= 50.0 && soilMoisturePercent <= 70.0) {
+    lastIrrigationReason = "SULAMA-8: OPTIMAL NEM. Sulama gerekmiyor";
+    return false;
+  }
+  
+  // Varsayilan: Sulama yapma
+  return false;
+}
+
+// Pompa durumunu ayarla
+void setPumpState(bool state, int duration, String reason) {
+  // Role kontrolu (role baglaninca yorum satirini kaldir)
+  // digitalWrite(PUMP_RELAY_PIN, state ? HIGH : LOW);
+  
+  // Simule edilmis cikti (test icin)
+  Serial.println(F("\n>>> SULAMA KONTROLU <<<"));
+  Serial.print(F("Onceki Durum: "));
+  Serial.println(isPumpOn ? F("ACIK") : F("KAPALI"));
+  Serial.print(F("Yeni Durum: "));
+  Serial.println(state ? F("ACIK") : F("KAPALI"));
+  
+  if (state) {
+    Serial.print(F("Sure: "));
+    Serial.print(duration);
+    Serial.println(F(" saniye"));
+  }
+  
+  Serial.print(F("Sebep: "));
+  Serial.println(reason);
+  
+  if (state && !isPumpOn) {
+    Serial.println(F("Islem: POMPA ACILIYOR..."));
+    Serial.print(F("Role Pin D"));
+    Serial.print(PUMP_RELAY_PIN);
+    Serial.println(F(": HIGH"));
+  } else if (!state && isPumpOn) {
+    Serial.println(F("Islem: POMPA KAPATILIYOR..."));
+    Serial.print(F("Role Pin D"));
+    Serial.print(PUMP_RELAY_PIN);
+    Serial.println(F(": LOW"));
+  } else {
+    Serial.println(F("Islem: DEGISIKLIK YOK"));
+  }
+  
+  Serial.println(F(">>> SULAMA KONTROLU BITTI <<<\n"));
+  
+  // Global degiskenleri guncelle
+  isPumpOn = state;
+  if (state) {
+    pumpStartTime = millis();
+    irrigationDuration = duration;
+  }
+  lastIrrigationReason = reason;
 }
 
 // ========================================
@@ -495,7 +756,7 @@ int checkGreenhouseConditions() {
   // KOD 7: DONMA RISKI (EN YUKSEK ONCELIK)
   // ============================================
   if (temp < 10.0 || dewPoint < 5.0) {
-    lastRoofReason = "CODE-7: FREEZE RISK! Emergency close";
+    lastRoofReason = "KOD-7: DONMA RISKI! Acil kapama";
     return 0; // %0 - Tamamen kapali
   }
   
@@ -503,7 +764,7 @@ int checkGreenhouseConditions() {
   // KOD 1: ASIRI SICAK + NEM (ACIL)
   // ============================================
   if (temp > 32.0 && humidity > 70.0 && heatIndex > 35.0) {
-    lastRoofReason = "CODE-1: EXTREME HEAT+HUMIDITY! Full ventilation";
+    lastRoofReason = "KOD-1: ASIRI SICAK+NEM! Tam havalandirma";
     return 100; // %100 - Tamamen acik
   }
   
@@ -511,7 +772,7 @@ int checkGreenhouseConditions() {
   // KOD 8: FIRTINA RISKI (BASINC DUSUK)
   // ============================================
   if (pressure < 985.0) {
-    lastRoofReason = "CODE-8: LOW PRESSURE! Storm protection";
+    lastRoofReason = "KOD-8: DUSUK BASINC! Firtina koruması";
     return 0; // %0 - Tamamen kapali
   }
   
@@ -519,7 +780,7 @@ int checkGreenhouseConditions() {
   // KOD 2: YUKSEK SICAKLIK
   // ============================================
   if (temp > 28.0 && co2ppm > 800) {
-    lastRoofReason = "CODE-2: HIGH TEMP+CO2. Ventilation active";
+    lastRoofReason = "KOD-2: YUKSEK SICAK+CO2. Havalandirma aktif";
     return 75; // %75 - Cok acik
   }
   
@@ -527,7 +788,7 @@ int checkGreenhouseConditions() {
   // KOD 3: YUKSEK CO2
   // ============================================
   if (co2ppm > 1500 && temp > 20.0 && mhz14aReady) {
-    lastRoofReason = "CODE-3: HIGH CO2. Air exchange needed";
+    lastRoofReason = "KOD-3: YUKSEK CO2. Hava degisimi gerekli";
     return 50; // %50 - Yarim acik
   }
   
@@ -535,7 +796,7 @@ int checkGreenhouseConditions() {
   // KOD 4: YUKSEK NEM (KUF RISKI)
   // ============================================
   if (humidity > 85.0 && temp < 25.0 && (temp - dewPoint) < 3.0) {
-    lastRoofReason = "CODE-4: HIGH HUMIDITY. Mold risk prevention";
+    lastRoofReason = "KOD-4: YUKSEK NEM. Kuf riski onleme";
     return 40; // %40 - Orta aciklik
   }
   
@@ -543,7 +804,7 @@ int checkGreenhouseConditions() {
   // KOD 6: GECE SOGUK KORUMA
   // ============================================
   if (lux < 50.0 && temp < 18.0) {
-    lastRoofReason = "CODE-6: NIGHT MODE. Cold protection";
+    lastRoofReason = "KOD-6: GECE MODU. Soguk koruma";
     return 0; // %0 - Tamamen kapali
   }
   
@@ -551,7 +812,7 @@ int checkGreenhouseConditions() {
   // KOD 5: GUNDUZ HAVALANDIRMA
   // ============================================
   if (lux > 10000.0 && temp > 22.0 && temp < 28.0 && co2ppm < 1000) {
-    lastRoofReason = "CODE-5: DAY VENTILATION. Normal airflow";
+    lastRoofReason = "KOD-5: GUNDUZ HAVALANDIRMA. Normal hava akisi";
     return 25; // %25 - Parsiyel havalandirma
   }
   
@@ -560,7 +821,7 @@ int checkGreenhouseConditions() {
   // ============================================
   if (temp >= 20.0 && temp <= 26.0 && humidity >= 50.0 && humidity <= 70.0 
       && co2ppm >= 400 && co2ppm <= 1000) {
-    lastRoofReason = "CODE-9: OPTIMAL CONDITIONS. System stable";
+    lastRoofReason = "KOD-9: OPTIMAL KOSULLAR. Sistem stabil";
     return 0; // %0 - Enerji tasarrufu, kapali tut
   }
   
@@ -579,14 +840,14 @@ void setRoofPosition(int position, String reason) {
   // roofServo.write(servoAngle);
   
   // Simule edilmis cikti (test icin)
-  Serial.println(F("\n>>> GREENHOUSE ROOF CONTROL <<<"));
-  Serial.print(F("Previous Position: "));
+  Serial.println(F("\n>>> SERA KAPAGI KONTROLU <<<"));
+  Serial.print(F("Onceki Pozisyon: "));
   Serial.print(currentRoofPosition);
   Serial.println(F("%"));
-  Serial.print(F("New Position: "));
+  Serial.print(F("Yeni Pozisyon: "));
   Serial.print(position);
   Serial.println(F("%"));
-  Serial.print(F("Reason: "));
+  Serial.print(F("Sebep: "));
   Serial.println(reason);
   
   if (position > currentRoofPosition) {

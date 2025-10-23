@@ -8,6 +8,7 @@
 - **CO2** (MH-Z14A): ppm
 - **Işık Şiddeti** (BH1750): lux
 - **Basınç** (BME680): hPa
+- **Toprak Nemi** (MH Water Sensor): %
 - **Hissedilen Sıcaklık** (Heat Index): °C
 - **Çiy Noktası** (Dew Point): °C
 
@@ -245,9 +246,219 @@ BAŞLA
 ## 🔧 Gerekli Donanım Eklemeleri
 
 1. **Servo Motor / Lineer Aktüatör** - Kapak açma mekanizması
-2. **Röle Modülü** - Servo kontrol için
-3. **Yağmur Sensörü** (Opsiyonel) - Fırtına tespiti için
-4. **Toprak Nem Sensörü** (Opsiyonel) - Sulama kontrolü
+2. **Röle Modülü (2 Kanal)** - Servo kontrol + Sulama pompası
+3. **MH Water Sensor** - Toprak nem ölçümü ✅ EKLENMIŞ
+4. **Su Pompası / Vana** - Sulama sistemi
+5. **Yağmur Sensörü** (Opsiyonel) - Fırtına tespiti için
+
+---
+
+## 💧 SULAMA SİSTEMİ KONTROL KOŞULLARI
+
+### 📊 Sulama Kararı Parametreleri:
+- **Toprak Nemi** (MH Water Sensor): %
+- **Sıcaklık** (BME680): °C
+- **Hava Nemi** (BME680): %
+- **Işık Şiddeti** (BH1750): lux
+- **Basınç** (BME680): hPa
+
+---
+
+## 🚰 SULAMA KODU 1: ACİL SULAMA
+
+### Durum: Çok Kuru Toprak + Yüksek Sıcaklık
+**Koşullar:**
+```
+Toprak Nemi < 20%
+VE
+Sıcaklık > 28°C
+```
+**Aksiyon:**
+- 🚰 Sulamayı AÇIK (30 saniye)
+- ✅ Sera kapağını %50 aç (buharlaşma kontrolü)
+- 🚨 UYARI: "Acil sulama - Bitki stres riski!"
+- ⏱️ 10 dakika sonra tekrar kontrol et
+
+**Neden?** Yüksek sıcaklık + kuru toprak = bitki dehidrasyonu riski
+
+---
+
+## 🟠 SULAMA KODU 2: NORMAL SULAMA (KURU TOPRAK)
+
+### Durum: Toprak Kuru
+**Koşullar:**
+```
+Toprak Nemi < 40%
+VE
+Sıcaklık > 20°C
+VE
+Işık > 1000 lux (Gündüz)
+```
+**Aksiyon:**
+- 🚰 Sulamayı AÇIK (20 saniye)
+- 📝 Log: "Normal sulama başlatıldı"
+- ⏱️ 15 dakika sonra tekrar kontrol et
+
+---
+
+## 🟢 SULAMA KODU 3: AKŞAM SULAMA (OPTİMAL)
+
+### Durum: Akşam Saatleri + Orta Kuru Toprak
+**Koşullar:**
+```
+Toprak Nemi < 50%
+VE
+Işık < 1000 lux (Akşam)
+VE
+Sıcaklık > 15°C
+```
+**Aksiyon:**
+- 🚰 Sulamayı AÇIK (25 saniye)
+- 💡 En verimli sulama zamanı!
+- 📝 Log: "Akşam sulama - Optimal zaman"
+
+**Neden?** Akşam sulama buharlaşmayı minimize eder, su verimliliği maksimum
+
+---
+
+## 🟡 SULAMA KODU 4: SULAMA İPTAL (YAĞMUR)
+
+### Durum: Yağış Tespit Edildi
+**Koşullar:**
+```
+Basınç < 990 hPa
+VE
+Hava Nemi > 85%
+```
+**VEYA**
+```
+Toprak Nemi > 80%
+```
+**Aksiyon:**
+- ❌ Sulamayı DURDUR
+- 📝 Log: "Sulama iptal - Doğal yağış/aşırı nem"
+- ⏱️ 30 dakika bekle
+
+**Neden?** Doğal yağış sulamayı gereksiz kılar, enerji tasarrufu
+
+---
+
+## 🔴 SULAMA KODU 5: AŞIRI SULAMA KORUMASI
+
+### Durum: Toprak Çok Islak
+**Koşullar:**
+```
+Toprak Nemi > 90%
+```
+**Aksiyon:**
+- 🚨 UYARI: "AŞIRI SULAMA - Drenaj problemi!"
+- ❌ Sulama sistemini kilitle (24 saat)
+- ✅ Sera kapağını %75 aç (kuruma için)
+- 📝 Log: "Toprak aşırı ıslak - Kök çürümesi riski"
+
+**Neden?** Aşırı su bitki köklerini çürütür, oksijen eksikliğine neden olur
+
+---
+
+## 🟣 SULAMA KODU 6: KÜFLENME RİSKİ
+
+### Durum: Yüksek Toprak Nemi + Yüksek Hava Nemi
+**Koşullar:**
+```
+Toprak Nemi > 80%
+VE
+Hava Nemi > 85%
+VE
+Sıcaklık < 22°C
+```
+**Aksiyon:**
+- ❌ Sulamayı DURDUR
+- ✅ Sera kapağını %40 aç (kuruma + hava sirkülasyonu)
+- 📝 Log: "Küf riski - Havalandırma aktif"
+
+**Neden?** Yüksek nem + düşük sıcaklık = küf üremesi için ideal ortam
+
+---
+
+## 🔵 SULAMA KODU 7: GEJ SULAMA YASAĞI
+
+### Durum: Gece Soğuk
+**Koşullar:**
+```
+Işık < 50 lux (Gece)
+VE
+Sıcaklık < 12°C
+```
+**Aksiyon:**
+- ❌ Sulamayı DURDUR
+- 📝 Log: "Gece sulama yasağı - Soğuk koruma"
+- ⏱️ Sabah güneş çıkana kadar bekle
+
+**Neden?** Gece sulama toprak sıcaklığını düşürür, bitki stresine neden olur
+
+---
+
+## 🟢 SULAMA KODU 8: İDEAL DURUM (SULAMA YOK)
+
+### Durum: Optimal Toprak Nemi
+**Koşullar:**
+```
+Toprak Nemi: 50-70%
+```
+**Aksiyon:**
+- ✅ Sulama sistemini KAPAT
+- 📝 Log: "Toprak nem seviyesi ideal"
+- ⏱️ Normal monitoring devam et
+
+---
+
+## 📋 Sulama Öncelik Sıralaması
+
+1. **SULAMA KODU 5** - Aşırı sulama koruması (ACİL)
+2. **SULAMA KODU 7** - Gece sulama yasağı (YÜKSEK)
+3. **SULAMA KODU 4** - Yağmur iptali (YÜKSEK)
+4. **SULAMA KODU 6** - Küf riski (ORTA)
+5. **SULAMA KODU 1** - Acil sulama (ORTA)
+6. **SULAMA KODU 3** - Akşam sulama (DÜŞÜK)
+7. **SULAMA KODU 2** - Normal sulama (DÜŞÜK)
+8. **SULAMA KODU 8** - İdeal durum (BİLGİ)
+
+---
+
+## 🌊 Sulama Karar Ağacı
+
+```
+BAŞLA (Sulama Kontrolü)
+  │
+  ├─ Toprak Nemi > 90%? ──> EVET ──> [SULAMA KODU 5: AŞIRI SULAMA - DURDUR]
+  │
+  ├─ Gece VE Sıcaklık < 12°C? ──> EVET ──> [SULAMA KODU 7: GECE YASAĞI]
+  │
+  ├─ Basınç < 990 VE Nem > 85%? ──> EVET ──> [SULAMA KODU 4: YAĞMUR İPTAL]
+  │
+  ├─ Toprak > 80% VE Hava Nem > 85%? ──> EVET ──> [SULAMA KODU 6: KÜF RİSKİ]
+  │
+  ├─ Toprak < 20% VE Sıcaklık > 28°C? ──> EVET ──> [SULAMA KODU 1: ACİL]
+  │
+  ├─ Toprak < 50% VE Işık < 1000? ──> EVET ──> [SULAMA KODU 3: AKŞAM]
+  │
+  ├─ Toprak < 40% VE Gündüz? ──> EVET ──> [SULAMA KODU 2: NORMAL]
+  │
+  └─ Toprak 50-70%? ──> EVET ──> [SULAMA KODU 8: İDEAL - DURDUR]
+```
+
+---
+
+## 💧 Sulama Süre Tablosu
+
+| Toprak Nemi | Sıcaklık | Sulama Süresi | Bekleme |
+|-------------|----------|---------------|---------|
+| < 20% | > 28°C | 30 saniye | 10 dk |
+| < 40% | 20-28°C | 20 saniye | 15 dk |
+| < 50% | Akşam | 25 saniye | 20 dk |
+| 50-70% | Herhangi | DURDUR | - |
+| > 80% | Herhangi | DURDUR | 30 dk |
+| > 90% | Herhangi | KİLİTLİ | 24 saat |
 
 ---
 
@@ -259,3 +470,4 @@ Bu koşullar **genel sera bitkileri** için optimize edilmiştir. Özel bitkiler
 - ASHRAE Greenhouse Design Standards
 - FAO Agricultural Guidelines
 - Plant Climate Control Systems (Wageningen University)
+- Irrigation Scheduling for Greenhouse Production (UC Davis)
