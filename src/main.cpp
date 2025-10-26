@@ -3,6 +3,7 @@
 #include <BH1750.h>
 #include <Adafruit_BME680.h>
 #include <Adafruit_Sensor.h>
+#include "LoRa_E32.h"
 // #include <Servo.h>  // Servo motor icin - servo baglaninca yorum satirini kaldir
 
 // I2C Pin tanimlari (Arduino Mega icin D20=SDA, D21=SCL)
@@ -12,6 +13,11 @@
 // UART Pin tanimlari (Arduino Mega icin D19=RX1, D18=TX1)
 #define MHZ14A_RX 19  // Arduino RX -> MH-Z14A TX
 #define MHZ14A_TX 18  // Arduino TX -> MH-Z14A RX
+
+// LoRa E32 Pin tanimlari (Arduino Mega Serial2: D17=RX2, D16=TX2)
+#define LORA_M0_PIN 6   // LoRa M0 kontrol pini
+#define LORA_M1_PIN 7   // LoRa M1 kontrol pini
+// LoRa Serial2 kullanacak: RX2=D17, TX2=D16 (donanim UART)
 
 // Servo motor pin tanimlamasi
 #define SERVO_PIN 9   // Kapak servo motoru D9'a bagli
@@ -25,10 +31,50 @@
 // Sensor nesneleri
 BH1750 lightMeter;
 Adafruit_BME680 bme;
+LoRa_E32 e32ttl100(10, 11);  // LoRa modulu (RX=10, TX=11 - Software Serial)
 // Servo roofServo;  // Sera kapak servo motoru - servo baglaninca yorum satirini kaldir
 
 // Deniz seviyesi basinci (hPa) - yukseklik hesaplama icin
 #define SEALEVELPRESSURE_HPA (1013.25)
+
+// LoRa veri paketi yapisi - Tum sensor verileri
+#pragma pack(push,1)
+struct SensorDataPacket {
+  // BME680 verileri
+  float temperature;
+  float humidity;
+  float pressure;
+  float gas_resistance;
+  
+  // BH1750 verileri
+  float lux;
+  
+  // MH-Z14A verileri
+  uint16_t co2_ppm;
+  int8_t co2_temperature;
+  
+  // Toprak nem sensoru
+  float soil_moisture_percent;
+  uint16_t soil_moisture_raw;
+  
+  // Kontrol durumlari
+  uint8_t roof_position;        // 0-100%
+  uint8_t pump_state;           // 0=KAPALI, 1=ACIK
+  uint16_t irrigation_duration; // Sulama suresi (saniye)
+  
+  // Hesaplanan degerler
+  float dew_point;
+  float heat_index;
+  float absolute_humidity;
+  
+  // Sistem durumu
+  uint32_t uptime;              // Sistem calisma suresi (saniye)
+  uint8_t mhz14a_ready;         // MH-Z14A hazir mi? (0/1)
+  
+  // CRC kontrol
+  uint16_t crc;
+};
+#pragma pack(pop)
 
 // MH-Z14A komutlari
 byte mhz14aCmd[9] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79};
@@ -65,6 +111,7 @@ String lastIrrigationReason = "System Start"; // Son sulama sebebi
 
 // Fonksiyon prototipleri
 void initSensors();
+void initLoRa();
 void readBH1750();
 void readBME680();
 void readMHZ14A();
@@ -77,6 +124,9 @@ void setRoofPosition(int position, String reason);
 void setPumpState(bool state, int duration, String reason);
 int checkGreenhouseConditions();
 bool checkIrrigationNeeded();
+void sendLoRaData();
+uint16_t calcCRC(const SensorDataPacket& packet);
+void hexDump(const uint8_t *data, size_t len);
 
 // Bilimsel hesaplama fonksiyonlari
 float calculateDewPoint(float temp, float humidity);
@@ -109,6 +159,9 @@ void setup() {
   
   // Sensorleri baslat
   initSensors();
+  
+  // LoRa modulu baslat
+  initLoRa();
   
   // Role (sulama pompasi) pin ayari
   pinMode(PUMP_RELAY_PIN, OUTPUT);
@@ -154,6 +207,9 @@ void loop() {
   
   // Sulama kontrol
   controlIrrigation();
+  
+  // LoRa ile veri gonder
+  sendLoRaData();
   
   printSensorData();
   
@@ -965,4 +1021,140 @@ float co2PpmToMgPerM3(int ppm, float temp, float pressure) {
   float concentration = (ppm * 44.01 * pressurePa) / (8.314 * tempK * 1000.0);
   
   return concentration;
+}
+
+// ========================================
+// LORA HABERLESME FONKSIYONLARI
+// ========================================
+
+// LoRa modulu baslatma
+void initLoRa() {
+  Serial.println(F("\n--- LoRa E32 Modulu Baslatiliyor ---"));
+  
+  // M0 ve M1 pinlerini ayarla (Normal mod: LOW, LOW)
+  pinMode(LORA_M0_PIN, OUTPUT);
+  pinMode(LORA_M1_PIN, OUTPUT);
+  digitalWrite(LORA_M0_PIN, LOW);  // NORMAL MODE
+  digitalWrite(LORA_M1_PIN, LOW);
+  delay(50);
+  
+  // LoRa modulu baslat
+  e32ttl100.begin();
+  
+  Serial.print(F("LoRa VERICI hazir. Paket boyutu: "));
+  Serial.println((int)sizeof(SensorDataPacket));
+  Serial.print(F("LoRa RX Pin: 10, TX Pin: 11"));
+  Serial.println(F("\nLoRa M0=LOW, M1=LOW (Normal Mode)"));
+  Serial.println();
+}
+
+// CRC hesaplama fonksiyonu
+uint16_t calcCRC(const SensorDataPacket& packet) {
+  uint16_t crc = 0;
+  const uint8_t* ptr = (const uint8_t*)&packet;
+  // CRC alanı hariç tüm baytları topla
+  for (size_t i = 0; i < sizeof(SensorDataPacket) - sizeof(packet.crc); i++) {
+    crc += ptr[i];
+  }
+  return crc;
+}
+
+// HEX dump fonksiyonu (debug icin)
+void hexDump(const uint8_t *data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    if (data[i] < 16) Serial.print("0");
+    Serial.print(data[i], HEX);
+    Serial.print(" ");
+    if ((i + 1) % 16 == 0) Serial.println();
+  }
+  Serial.println();
+}
+
+// LoRa ile veri gonderme fonksiyonu
+void sendLoRaData() {
+  // Veri paketini olustur
+  SensorDataPacket packet;
+  
+  // BME680 verileri
+  packet.temperature = bme.temperature;
+  packet.humidity = bme.humidity;
+  packet.pressure = bme.pressure / 100.0;  // Pa -> hPa
+  packet.gas_resistance = bme.gas_resistance / 1000.0;  // ohm -> Kohm
+  
+  // BH1750 verileri
+  packet.lux = lightMeter.readLightLevel();
+  
+  // MH-Z14A verileri
+  packet.co2_ppm = (uint16_t)co2ppm;
+  packet.co2_temperature = (int8_t)co2Temperature;
+  
+  // Toprak nem verileri
+  packet.soil_moisture_percent = soilMoisturePercent;
+  packet.soil_moisture_raw = (uint16_t)soilMoistureRaw;
+  
+  // Kontrol durumlari
+  packet.roof_position = (uint8_t)currentRoofPosition;
+  packet.pump_state = isPumpOn ? 1 : 0;
+  if (isPumpOn) {
+    unsigned long elapsedTime = (millis() - pumpStartTime) / 1000;
+    packet.irrigation_duration = (uint16_t)(irrigationDuration - elapsedTime);
+  } else {
+    packet.irrigation_duration = 0;
+  }
+  
+  // Hesaplanan degerler
+  packet.dew_point = calculateDewPoint(bme.temperature, bme.humidity);
+  packet.heat_index = calculateHeatIndex(bme.temperature, bme.humidity);
+  packet.absolute_humidity = calculateAbsoluteHumidity(bme.temperature, bme.humidity);
+  
+  // Sistem durumu
+  packet.uptime = millis() / 1000;  // saniye cinsinden
+  packet.mhz14a_ready = mhz14aReady ? 1 : 0;
+  
+  // CRC hesapla
+  packet.crc = calcCRC(packet);
+  
+  // Debug bilgileri
+  Serial.println(F("\n>>> LORA VERI GONDERIMI <<<"));
+  Serial.print(F("Paket Boyutu: "));
+  Serial.print((int)sizeof(SensorDataPacket));
+  Serial.println(F(" byte"));
+  
+  Serial.println(F("\n[DEBUG] Gonderilecek Paket Ozeti:"));
+  Serial.print(F("  Sicaklik: "));
+  Serial.print(packet.temperature, 1);
+  Serial.println(F(" C"));
+  Serial.print(F("  Nem: "));
+  Serial.print(packet.humidity, 1);
+  Serial.println(F(" %"));
+  Serial.print(F("  CO2: "));
+  Serial.print(packet.co2_ppm);
+  Serial.println(F(" ppm"));
+  Serial.print(F("  Toprak Nem: "));
+  Serial.print(packet.soil_moisture_percent, 1);
+  Serial.println(F(" %"));
+  Serial.print(F("  Sera Kapak: "));
+  Serial.print(packet.roof_position);
+  Serial.println(F(" %"));
+  Serial.print(F("  Sulama: "));
+  Serial.println(packet.pump_state ? F("ACIK") : F("KAPALI"));
+  Serial.print(F("  CRC: 0x"));
+  Serial.println(packet.crc, HEX);
+  
+  Serial.println(F("\n[DEBUG] HEX Dump:"));
+  hexDump((uint8_t*)&packet, sizeof(packet));
+  
+  // LoRa ile gonder
+  ResponseStatus rs = e32ttl100.sendMessage((uint8_t*)&packet, sizeof(packet));
+  
+  Serial.print(F("[LORA] Gonderim Sonucu: "));
+  Serial.println(rs.getResponseDescription());
+  
+  if (rs.code == 1) {
+    Serial.println(F("[LORA] *** PAKET BASARIYLA GONDERILDI ***"));
+  } else {
+    Serial.println(F("[LORA] !!! GONDERIM HATASI !!!"));
+  }
+  
+  Serial.println(F(">>> LORA GONDERIM BITTI <<<\n"));
 }
