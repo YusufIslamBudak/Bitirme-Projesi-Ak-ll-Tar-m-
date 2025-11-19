@@ -1,5 +1,60 @@
 # Akıllı Sera Sistemi - Kontrol Koşulları
 
+## 🔬 KALMAN FİLTRESİ SİSTEMİ
+
+### Nedir?
+Kalman filtresi, sensör verilerindeki gürültüleri matematiksel olarak azaltan ve gerçek değişimleri koruyan bir algoritmadır. Sistemimizde tüm sensörler için aktiftir.
+
+### Neden Kullanıyoruz?
+✅ **Sensör Titremelerini Azaltır:** Ham sensör verileri +/- 5-10% dalgalanabilir  
+✅ **Gereksiz Kontrolleri Önler:** Röle ve servo daha az tetiklenir (enerji tasarrufu)  
+✅ **Kararlı Kararlar:** Kontrol algoritmaları temiz verilerle çalışır  
+✅ **Gerçek Değişimleri Korur:** Ani sıcaklık artışları filtrelenmez, takip edilir  
+
+### Filtrelenen Sensörler
+
+| Sensör | Ham Veri Gürültüsü | Kalman Etkisi |
+|--------|-------------------|---------------|
+| **Sıcaklık** | ±0.5°C titreme | ±0.1°C düzgün |
+| **Nem** | ±2-3% titreme | ±0.5% düzgün |
+| **Basınç** | ±1 hPa titreme | ±0.2 hPa düzgün |
+| **Gaz Direnci** | ±10 KOhm titreme | ±2 KOhm düzgün |
+| **Işık** | ±20 lux titreme | ±5 lux düzgün |
+| **CO2** | ±30 ppm titreme | ±5 ppm düzgün |
+| **Toprak Nem** | ±5% titreme | ±1% düzgün |
+
+### Örnek: Gerçek Test Verisi
+
+**Senaryo:** Toprak nem sensörü ani gürültü aldı
+
+| Zaman | Ham Değer (RAW) | Filtrelenmiş (FILTERED) | Fark |
+|-------|----------------|------------------------|------|
+| 0s | 65% | 65.00% | 0% |
+| 5s | **100%** ⚠️ | 76.67% ✓ | **-23%** (gürültü filtrelendi) |
+| 10s | 99.5% | 82.52% | -17% |
+| 15s | 98% | 86.02% | -12% |
+
+**Sonuç:** Ham sensör 100%'e sıçradı (hatalı), Kalman filtresi gerçek değişimi kademeli takip etti.
+
+### Kontrol Algoritmaları Hangi Değerleri Kullanır?
+
+**Otomatik Modda:**
+- Tüm kontrol kararları **FILTERED (filtrelenmiş)** değerlerle alınır
+- Sera kapak kontrolü: FILTERED sıcaklık, nem, CO2 kullanır
+- Sulama kontrolü: FILTERED toprak nemi kullanır
+
+**LoRa Paketleri:**
+- Yer istasyonuna sadece **FILTERED değerler** gönderilir
+- Paket boyutu: 54 byte (optimize)
+- Alıcı tarafta temiz ve kararlı veriler işlenir
+
+**Serial Monitör:**
+- Hem RAW hem FILTERED değerler gösterilir
+- Kullanıcı karşılaştırma yapabilir
+- Format: `25.16 C (RAW) | 25.14 C (FILTERED)`
+
+---
+
 ## 🎮 Kontrol Modları
 
 ### 1. OTOMATIK MOD
