@@ -2,7 +2,47 @@
 
 ## 📋 Proje Özeti
 
-Çoklu sensör entegrasyonu ile otomatik sera kontrol sistemi. Sıcaklık, nem, CO2, ışık ve toprak nemi verilerini kullanarak sera kapağı ve sulama sistemini akıllı bir şekilde kontrol eder.
+Çoklu sensör entegrasyonu ile otomatik/manuel sera kontrol sistemi. Sıcaklık, nem, CO2, ışık ve toprak nemi verilerini kullanarak sera kapağı, havalandırma, aydınlatma ve sulama sistemini akıllı bir şekilde kontrol eder.
+
+**Özellikler:**
+- ✅ Otomatik mod: Sensör verilerine göre akıllı kontrol
+- ✅ Manuel mod: Serial komutlarla anlık kontrol
+- ✅ LoRa kablosuz veri iletimi (3 km menzil)
+- ✅ 4 kontrol sistemi (Kapak+Fan, Sulama, Aydınlatma)
+
+---
+
+## 🎮 Kontrol Modları
+
+### 1. OTOMATIK MOD (Varsayılan)
+Sistem sensör verilerine göre 9 sera kodu ve 8 sulama kodu ile otomatik kararlar verir.
+
+### 2. MANUEL MOD
+Serial port üzerinden komutlarla anlık kontrol:
+
+**Serial Komutlar (115200 baud):**
+```
+havaac    → Sera kapağını aç (0°) + Fan açık
+havakapa  → Sera kapağını kapat (95°) + Fan kapalı
+isikac    → Aydınlatmayı aç (D7)
+isikkapa  → Aydınlatmayı kapat (D7)
+sulaac    → Sulamayı aç (D31)
+sulakapa  → Sulamayı kapat (D31)
+```
+
+**⚠️ Sulama Güvenlik Özelliği:**
+- `sulaac` komutu verildiğinde sistem otomatik olarak:
+  1. Mevcut tüm sistem durumlarını kaydeder
+  2. Sera kapağını kapatır (95°)
+  3. Fan'ı kapatır
+  4. Işığı kapatır
+  5. Sulamayı başlatır
+  
+- `sulakapa` komutu verildiğinde:
+  1. Sulama durdurulur
+  2. Tüm sistemler önceki kayıtlı durumuna otomatik geri döner
+
+**Kullanım:** Serial Monitor'da komutu yazıp Enter'a basın.
 
 ---
 
@@ -95,18 +135,37 @@
 ### 4. Aktüatörler
 
 #### a) Servo Motor (Sera Kapağı)
-- **Model:** Standart servo (örn: SG90, MG996R)
+- **Model:** MG995 (Metal dişlili, yüksek tork)
 - **Kontrol:** PWM
-- **Açı:** 0-180°
+- **Açı:** 0° (Tam Açık) ~ 95° (Tam Kapalı)
 - **Pin:** D9
-- **Güç:** Harici 5V (servo tipine göre)
-
-#### b) Röle Modülü (Sulama Pompası)
-- **Tip:** 5V Röle
-- **Kanal:** 1 kanal (genişletilebilir)
-- **Kontrol:** Dijital pin
-- **Pin:** D10
-- **Yük:** Su pompası / Selenoid vana
+- **Güç:** 4.8-7.2V, 2.5A (yük altında)
+- **Tork:** 10 kg-cm
+- **Özellikler:**
+  - Metal dişliler (dayanıklı)
+  - Çift rulman (hassas)
+  - Su geçirmez koruma
+  
+#### b) Havalandırma Fanı Rölesi
+- **Pin:** D30
+- **Kontrol:** Dijital (LOW=Açık, HIGH=Kapalı)
+- **Özellikler:**
+  - Sera kapağı >30% açıkken otomatik aktif
+  - Manuel kontrol ile bağımsız çalıştırılabilir
+  
+#### c) Aydınlatma Rölesi
+- **Pin:** D7
+- **Kontrol:** Dijital (LOW=Açık, HIGH=Kapalı)
+- **Kullanım:**
+  - Otomatik: Işık < 200 lux → Açık
+  - Manuel: Komut 2/-2 ile kontrol
+  
+#### d) Sulama Pompası Rölesi
+- **Pin:** D31 (D10'dan taşındı - LoRa çakışması çözüldü)
+- **Kontrol:** Dijital (LOW=Açık, HIGH=Kapalı)
+- **Kullanım:**
+  - Otomatik: Toprak nemi < 40% → 20-30 saniye
+  - Manuel: Komut 3/-3 ile kontrol
 
 ---
 
@@ -125,16 +184,18 @@ ARDUINO MEGA 2560 (VERİCİ SİSTEMİ)
 ├─ Software Serial (D10/RX, D11/TX)
 │  └─ LoRa E32 Modülü (Verici)
 │     - M0 → D6
-│     - M1 → D7
+│     - M1 → D7 (LoRa kontrol pini)
 │
 ├─ Analog Input
 │  └─ A0 → MH Water Sensor
 │
 ├─ PWM Output
-│  └─ D9 → Servo Motor (Sera Kapağı)
+│  └─ D9 → MG995 Servo Motor (Sera Kapağı)
 │
-└─ Digital Output
-   └─ D10 → Röle (Sulama Pompası)
+└─ Digital Outputs (Aktuatörler)
+   ├─ D30 → Röle (Fan) - Active LOW
+   ├─ D7 → Röle (Işık) - Active LOW
+   └─ D31 → Röle (Sulama Pompası) - Active LOW
 
          ↓↓↓ LoRa 433MHz Kablosuz ↓↓↓
          
@@ -174,7 +235,9 @@ ARDUINO (ALICI - YER İSTASYONU)
                       │    • 8 Sulama Kodu
                       │
                       ├──> Kontrol Sinyalleri
-                      │    ├──> Servo Motor (Kapak)
+                      │    ├──> Servo Motor (Sera Kapağı)
+                      │    ├──> Röle (Fan)
+                      │    ├──> Röle (Işık)
                       │    └──> Röle (Sulama)
                       │
                       └──> LoRa Veri Paketi (72 byte)
@@ -217,13 +280,19 @@ ARDUINO (ALICI - YER İSTASYONU)
 ### 1. Ana Döngü (Loop)
 ```cpp
 loop() {
-  readAllSensors()       // Tüm sensörleri oku
-  calculateValues()      // Bilimsel hesaplamalar
-  controlGreenhouse()    // Sera kapak kontrolü
-  controlIrrigation()    // Sulama kontrolü
-  sendLoRaData()        // LoRa ile veri gönder
-  printData()           // Seri port çıktısı (lokal)
-  delay(5000)           // 5 saniye bekle
+  // Seri port komutlarını kontrol et (Manuel Mod)
+  processSerialCommand()
+  
+  // Her 5 saniyede bir sensör okuma ve otomatik kontrol
+  if (millis() - lastSensorRead >= 5000) {
+    readAllSensors()       // Tüm sensörleri oku
+    calculateValues()      // Bilimsel hesaplamalar
+    controlGreenhouse()    // Sera kapak kontrolü (otomatik mod)
+    controlIrrigation()    // Sulama kontrolü (otomatik mod)
+    sendLoRaData()        // LoRa ile veri gönder
+    printData()           // Seri port çıktısı (lokal)
+    lastSensorRead = millis()
+  }
 }
 ```
 
@@ -248,8 +317,10 @@ struct SensorDataPacket {
   float soil_moisture_percent;
   uint16_t soil_moisture_raw;
   
-  // Kontrol Durumları (5 byte)
+  // Kontrol Durumları (6 byte)
   uint8_t roof_position;        // 0-100%
+  uint8_t fan_state;            // 0/1
+  uint8_t light_state;          // 0/1
   uint8_t pump_state;           // 0/1
   uint16_t irrigation_duration; // saniye
   
@@ -266,26 +337,57 @@ struct SensorDataPacket {
   uint16_t crc;
 };
 #pragma pack(pop)
-// TOPLAM: 72 byte
+// TOPLAM: 73 byte
 ```
 
 ### 3. Kontrol Sistemi
 
-#### a) Sera Kapak Kontrolü
+#### a) Sera Kapak ve Havalandırma Kontrolü
 - **Girdi:** Sıcaklık, Nem, CO2, Işık, Basınç
-- **Çıktı:** Kapak pozisyonu (0-100%)
+- **Çıktı:** Kapak pozisyonu (0-100%) ve Fan durumu (AÇIK/KAPALI)
+- **Mod:**
+  - **Otomatik:** Sensör verilerine göre karar algoritması
+  - **Manuel:** Seri port komutları (1/-1)
 - **Frekans:** 5 saniye
 - **Histerezis:** 30 saniye (titreme önleme)
 
-#### b) Sulama Kontrolü
+#### b) Aydınlatma Kontrolü
+- **Çıktı:** LED/Lamba AÇIK/KAPALI
+- **Mod:**
+  - **Otomatik:** Işık sensörü verilerine göre (gelecekte eklenebilir)
+  - **Manuel:** Seri port komutları (2/-2)
+- **Pin:** D7 (Active LOW)
+
+#### c) Sulama Kontrolü
 - **Girdi:** Toprak Nemi, Sıcaklık, Hava Nemi, Işık
 - **Çıktı:** Pompa AÇIK/KAPALI
+- **Mod:**
+  - **Otomatik:** Toprak nem sensörü verilerine göre
+  - **Manuel:** Seri port komutları (sulaac/sulakapa)
 - **Frekans:** 5 saniye
 - **Minimum Bekleme:** 10 dakika
+- **⚠️ Güvenlik Özelliği:** 
+  - Sulama başladığında diğer tüm sistemler otomatik kapatılır
+  - Sulama bittiğinde sistemler önceki durumuna geri döner
+  - Bu özellik elektriksel güvenlik ve su-elektrik teması riskini önler
 
-#### c) LoRa Haberleşme
+#### d) Manuel Kontrol (Seri Port)
+- **Baud Rate:** 115200
+- **Komutlar:**
+  - `havaac`: Kapak aç + Fan aç
+  - `havakapa`: Kapak kapat + Fan kapat
+  - `isikac`: Işık aç
+  - `isikkapa`: Işık kapat
+  - `sulaac`: Sulama aç (diğer sistemleri kapat)
+  - `sulakapa`: Sulama kapat (diğer sistemleri geri yükle)
+- **Özellikler:** 
+  - Servo titreme önleme (attach/detach pattern)
+  - Durum kaydetme ve geri yükleme (sulama güvenliği)
+  - Büyük/küçük harf duyarsız komut işleme
+
+#### e) LoRa Haberleşme
 - **Protokol:** Binary paket transferi
-- **Paket Boyutu:** 72 byte
+- **Paket Boyutu:** 73 byte
 - **Gönderim Frekansı:** 5 saniye
 - **Hata Kontrolü:** CRC-16
 - **Mod:** Normal (M0=LOW, M1=LOW)
@@ -550,9 +652,11 @@ lib_deps =
 #### Verici Sistem (Sera İçi)
 1. Tüm sensörleri Arduino Mega'ya bağlayın
 2. LoRa E32 modülünü D10, D11, D6, D7 pinlerine bağlayın
-3. Servo motoru D9'a bağlayın (harici güç)
-4. Röle modülünü D10'a bağlayın
-5. Güç kaynağını bağlayın (5V 3A)
+3. MG995 Servo motoru D9'a bağlayın (harici 5V güç)
+4. Fan rölesini D30'a bağlayın (Active LOW)
+5. Işık rölesini D7'ye bağlayın (Active LOW) - *LoRa M1 pin ile çakışma yok*
+6. Sulama rölesini D31'e bağlayın (Active LOW)
+7. Güç kaynağını bağlayın (5V 3A)
 
 #### Alıcı Sistem (Yer İstasyonu)
 1. Arduino'ya LoRa E32 modülünü bağlayın (aynı pin konfigürasyonu)
@@ -582,6 +686,13 @@ pio run --target upload
 2. MH-Z14A sensörünün 3 dakika ısınmasını bekleyin
 3. Sensör değerlerini ve LoRa gönderimlerini gözlemleyin
 4. Sistem otomatik kontrole başlayacak
+5. **Manuel Kontrol:** Seri monitörden komut gönderin:
+   - `1` → Kapak aç + Fan aç
+   - `-1` → Kapak kapat + Fan kapat
+   - `2` → Işık aç
+   - `-2` → Işık kapat
+   - `3` → Sulama aç
+   - `-3` → Sulama kapat
 
 #### Alıcı
 1. Serial Monitor açın (9600 baud)
@@ -611,8 +722,30 @@ pio run --target upload
 4. **Soil Sensor:** Kuru/ıslak toprakta test edin
 
 ### Kontrol Testleri
-1. **Sera Kapak:** Sıcaklık değişimlerinde kapak hareketini gözleyin
-2. **Sulama:** Toprak nem seviyesini değiştirerek pompayı test edin
+1. **Sera Kapak (Manuel):** 
+   - Komut `havaac` → Servo 0° (açık), Fan AÇIK
+   - Komut `havakapa` → Servo 95° (kapalı), Fan KAPALI
+   - Servo titreme olmadan hareket etmeli
+   
+2. **Sera Kapak (Otomatik):** 
+   - Sıcaklık değişimlerinde kapak hareketini gözleyin
+   
+3. **Aydınlatma (Manuel):**
+   - Komut `isikac` → D7 röle AÇIK
+   - Komut `isikkapa` → D7 röle KAPALI
+   
+4. **Sulama Güvenlik Testi (Manuel):**
+   - Test senaryosu:
+     1. `havaac` ile kapağı ve fanı aç
+     2. `isikac` ile ışığı aç
+     3. `sulaac` komutu gönder
+     4. **Kontrol:** Kapak kapanmalı, fan kapanmalı, ışık kapanmalı, sulama başlamalı
+     5. `sulakapa` komutu gönder
+     6. **Kontrol:** Sulama kapanmalı, tüm sistemler önceki durumuna (açık) dönmeli
+   - ✅ Beklenen: Sistemler kaydedilen durumuna geri dönmeli
+   
+5. **Sulama (Otomatik):**
+   - Toprak nem seviyesini değiştirerek pompayı test edin
 
 ### LoRa İletişim Testleri
 1. **Yakın Mesafe (1-5m):**
@@ -642,10 +775,18 @@ pio run --target upload
 ## 🛡️ Güvenlik Özellikleri
 
 1. **Histerezis:** 30 saniye minimum hareket aralığı (titreme önleme)
-2. **Timeout:** MH-Z14A 3 dakika ısınma süresi
-3. **Sınır Kontrolü:** Tüm değerler min/max kontrollü
-4. **Aşırı Sulama Koruması:** 90% üstü nemde sulama kilidi
-5. **Donma Koruması:** 10°C altında kapak otomatik kapanır
+2. **Servo Titreme Önleme:** Attach/detach pattern (PWM sinyali sadece hareket anında aktif)
+3. **Sulama Güvenlik Sistemi:** 
+   - Sulama başladığında tüm elektrikli sistemler otomatik kapatılır
+   - Sulama bittiğinde sistemler önceki durumuna otomatik geri döner
+   - Su-elektrik teması riski minimize edilir
+4. **Durum Kaydetme/Geri Yükleme:** Manuel sulama komutlarında state management
+5. **Timeout:** MH-Z14A 3 dakika ısınma süresi
+6. **Sınır Kontrolü:** Tüm değerler min/max kontrollü
+7. **Aşırı Sulama Koruması:** 90% üstü nemde sulama kilidi
+8. **Donma Koruması:** 10°C altında kapak otomatik kapanır
+9. **Non-Blocking Loop:** millis() tabanlı zamanlama (seri komutlar kesintisiz işlenir)
+10. **Komut Doğrulama:** Sözel komutlar ile yanlış tetikleme önlenir
 
 ---
 

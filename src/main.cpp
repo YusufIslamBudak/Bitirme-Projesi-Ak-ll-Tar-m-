@@ -4,7 +4,9 @@
 #include <Adafruit_BME680.h>
 #include <Adafruit_Sensor.h>
 #include "LoRa_E32.h"
-// #include <Servo.h>  // Servo motor icin - servo baglaninca yorum satirini kaldir
+#include <Servo.h>
+#include "Communication.h"  // Haberlesme modulu
+#include "Sensors.h"        // Sensor modulu (Kalman filtreli)
 
 // I2C Pin tanimlari (Arduino Mega icin D20=SDA, D21=SCL)
 #define I2C_SDA 20
@@ -16,14 +18,14 @@
 
 // LoRa E32 Pin tanimlari (Arduino Mega Serial2: D17=RX2, D16=TX2)
 #define LORA_M0_PIN 6   // LoRa M0 kontrol pini
-#define LORA_M1_PIN 7   // LoRa M1 kontrol pini
+#define LORA_M1_PIN 8   // LoRa M1 kontrol pini (D7'den D8'e tasindi)
 // LoRa Serial2 kullanacak: RX2=D17, TX2=D16 (donanim UART)
 
-// Servo motor pin tanimlamasi
-#define SERVO_PIN 9   // Kapak servo motoru D9'a bagli
-
-// Role (Sulama pompasi) pin tanimlamasi
-#define PUMP_RELAY_PIN 10  // Sulama pompasi role D10'a bagli
+// Kontrol Pin Tanimlari
+#define SERVO_PIN 9          // MG995 Servo - Sera kapagi (0°=Acik, 95°=Kapali)
+#define FAN_RELAY_PIN 30     // Fan rolesi
+#define LIGHT_RELAY_PIN 7    // Aydinlatma rolesi
+#define PUMP_RELAY_PIN 31    // Sulama pompasi rolesi
 
 // Analog Pin tanimlari
 #define SOIL_MOISTURE_PIN A0  // MH Water Sensor (Toprak nem sensoru)
@@ -32,49 +34,14 @@
 BH1750 lightMeter;
 Adafruit_BME680 bme;
 LoRa_E32 e32ttl100(10, 11);  // LoRa modulu (RX=10, TX=11 - Software Serial)
-// Servo roofServo;  // Sera kapak servo motoru - servo baglaninca yorum satirini kaldir
+Servo mg995;  // MG995 Servo motoru
+
+// Haberlesme ve Sensor modulleri
+Communication comm(e32ttl100, LORA_M0_PIN, LORA_M1_PIN);
+Sensors sensors(lightMeter, bme);  // Kalman filtreli sensor modulu
 
 // Deniz seviyesi basinci (hPa) - yukseklik hesaplama icin
 #define SEALEVELPRESSURE_HPA (1013.25)
-
-// LoRa veri paketi yapisi - Tum sensor verileri
-#pragma pack(push,1)
-struct SensorDataPacket {
-  // BME680 verileri
-  float temperature;
-  float humidity;
-  float pressure;
-  float gas_resistance;
-  
-  // BH1750 verileri
-  float lux;
-  
-  // MH-Z14A verileri
-  uint16_t co2_ppm;
-  int8_t co2_temperature;
-  
-  // Toprak nem sensoru
-  float soil_moisture_percent;
-  uint16_t soil_moisture_raw;
-  
-  // Kontrol durumlari
-  uint8_t roof_position;        // 0-100%
-  uint8_t pump_state;           // 0=KAPALI, 1=ACIK
-  uint16_t irrigation_duration; // Sulama suresi (saniye)
-  
-  // Hesaplanan degerler
-  float dew_point;
-  float heat_index;
-  float absolute_humidity;
-  
-  // Sistem durumu
-  uint32_t uptime;              // Sistem calisma suresi (saniye)
-  uint8_t mhz14a_ready;         // MH-Z14A hazir mi? (0/1)
-  
-  // CRC kontrol
-  uint16_t crc;
-};
-#pragma pack(pop)
 
 // MH-Z14A komutlari
 byte mhz14aCmd[9] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79};
@@ -99,6 +66,20 @@ unsigned long lastRoofAction = 0;    // Son kapak hareketi zamani
 #define ROOF_ACTION_DELAY 30000      // Kapak hareketleri arasi minimum 30 saniye
 String lastRoofReason = "System Start"; // Son kapak hareketi sebebi
 
+// Serial Komut Kontrol Degiskenleri
+String serialCommand = "";           // Gelen komut
+bool roofOpen = false;                // Kapak durumu
+bool fanOn = false;                   // Fan durumu
+bool lightOn = false;                 // Isik durumu
+bool pumpOn = false;                  // Pompa durumu
+int currentServoPosition = 95;        // Mevcut servo pozisyonu (baslangiçta kapali)
+
+// Sulama oncesi durum kayit degiskenleri (geri yukleme icin)
+bool savedRoofOpen = false;           // Sulama oncesi kapak durumu
+bool savedFanOn = false;              // Sulama oncesi fan durumu
+bool savedLightOn = false;            // Sulama oncesi isik durumu
+int savedServoPosition = 95;          // Sulama oncesi servo pozisyonu
+
 // Global degiskenler - Sulama Kontrol
 bool isPumpOn = false;                      // Pompa durumu
 unsigned long pumpStartTime = 0;            // Pompa acilma zamani
@@ -111,7 +92,6 @@ String lastIrrigationReason = "System Start"; // Son sulama sebebi
 
 // Fonksiyon prototipleri
 void initSensors();
-void initLoRa();
 void readBH1750();
 void readBME680();
 void readMHZ14A();
@@ -125,8 +105,7 @@ void setPumpState(bool state, int duration, String reason);
 int checkGreenhouseConditions();
 bool checkIrrigationNeeded();
 void sendLoRaData();
-uint16_t calcCRC(const SensorDataPacket& packet);
-void hexDump(const uint8_t *data, size_t len);
+void processSerialCommand();  // Serial komut isleme fonksiyonu
 
 // Bilimsel hesaplama fonksiyonlari
 float calculateDewPoint(float temp, float humidity);
@@ -138,15 +117,9 @@ float luxToFootCandles(float lux);
 float co2PpmToMgPerM3(int ppm, float temp, float pressure);
 
 void setup() {
-  // Seri haberlesme baslat (Debug icin)
-  Serial.begin(115200);
-  while (!Serial) {
-    delay(10);
-  }
-  
-  Serial.println(F("=== Akilli Tarim Sistemi ==="));
-  Serial.println(F("BH1750 (Isik) + BME680 (Hava) + MH-Z14A (CO2) + Toprak Nem"));
-  Serial.println();
+  // Seri haberlesme baslat (Communication modulu ile)
+  comm.begin();
+  comm.printHeader();
   
   // I2C haberlesme baslat
   Wire.begin();
@@ -160,25 +133,39 @@ void setup() {
   // Sensorleri baslat
   initSensors();
   
-  // LoRa modulu baslat
-  initLoRa();
+  // LoRa modulu baslat (Communication modulu ile)
+  comm.initLoRa();
   
-  // Role (sulama pompasi) pin ayari
+  // Kontrol pinlerini baslat
+  pinMode(FAN_RELAY_PIN, OUTPUT);
+  digitalWrite(FAN_RELAY_PIN, HIGH);  // Baslangicta fan kapali (HIGH=kapali)
+  
+  pinMode(LIGHT_RELAY_PIN, OUTPUT);
+  digitalWrite(LIGHT_RELAY_PIN, HIGH);  // Baslangicta isik kapali (HIGH=kapali)
+  
   pinMode(PUMP_RELAY_PIN, OUTPUT);
-  digitalWrite(PUMP_RELAY_PIN, LOW);  // Baslangicta pompa kapali
-  Serial.println(F("Sulama pompasi rolesi baslatildi"));
-  Serial.println(F("Pompa durumu: KAPALI"));
+  digitalWrite(PUMP_RELAY_PIN, HIGH);  // Baslangicta pompa kapali (HIGH=kapali)
   
-  // Servo motor baslat (servo baglaninca yorum satirini kaldir)
-  // roofServo.attach(SERVO_PIN);
-  // roofServo.write(0);  // Baslangicta kapak kapali
-  Serial.println(F("Servo motor initialized (simulated)"));
-  Serial.println(F("Roof position: CLOSED (0%)"));
+  // Servo motor baslat
+  mg995.attach(SERVO_PIN);
+  mg995.write(95);  // Baslangicta kapak kapali (95 derece)
+  delay(500);       // Servo hareket etsin diye bekle
+  mg995.detach();   // PWM sinyalini kes, titreme onleme
+  
+  comm.printSuccess("Kontrol Sistemleri Baslatildi");
+  Serial.println(F("Servo Motor (D9): KAPALI (95 derece)"));
+  Serial.println(F("Fan Rolesi (D30): KAPALI"));
+  Serial.println(F("Isik Rolesi (D7): KAPALI"));
+  Serial.println(F("Pompa Rolesi (D31): KAPALI"));
+  comm.printCommandHelp();
   
   delay(1000);
 }
 
 void loop() {
+  // Serial komutlari isle (her zaman kontrol et)
+  processSerialCommand();
+  
   // MH-Z14A isinma kontrolu
   if (!mhz14aReady) {
     unsigned long elapsedTime = millis() - mhz14aStartTime;
@@ -188,101 +175,42 @@ void loop() {
     }
   }
   
-  // Ekrani temizle (ANSI escape code)
-  Serial.write(27);       // ESC
-  Serial.print(F("[2J")); // Ekrani temizle
-  Serial.write(27);       // ESC
-  Serial.print(F("[H"));  // Imleci en uste getir
-  
-  // Her 2 saniyede bir sensorleri oku
-  Serial.println(F("\n--- Yeni Okuma ---"));
-  
-  readBH1750();
-  readBME680();
-  readMHZ14A();
-  readSoilMoisture();
-  
-  // Sera kontrol
-  controlGreenhouse();
-  
-  // Sulama kontrol
-  controlIrrigation();
-  
-  // LoRa ile veri gonder
-  sendLoRaData();
-  
-  printSensorData();
-  
-  delay(5000);  // 5 saniye bekle
+  // Her 5 saniyede bir sensorleri oku ve otomatik kontrol yap
+  static unsigned long lastSensorRead = 0;
+  if (millis() - lastSensorRead >= 5000) {
+    lastSensorRead = millis();
+    
+    // Ekrani temizle (Communication modulu ile)
+    comm.clearScreen();
+    
+    Serial.println(F("\n--- Yeni Okuma ---"));
+    
+    // Sensors modulu ile tum sensor okumalarini yap (Kalman filtreli)
+    sensors.readAllSensors();
+    sensors.updateMHZ14AWarmup();
+    
+    // Sera kontrol (sadece otomatik modda)
+    // Manuel kontrolde servo karismamasi icin devre disi
+    // controlGreenhouse();
+    
+    // Sulama kontrol
+    controlIrrigation();
+    
+    // LoRa ile veri gonder (Communication modulu ile)
+    sendLoRaData();
+  }
 }
 
 // Sensorleri baslatma fonksiyonu
 void initSensors() {
-  Serial.println(F("Sensorler baslatiliyor..."));
+  // Sensors modulu ile sensor baslatma
+  sensors.begin();
+  sensors.initSensors();
+  sensors.setAltitude(100.0);  // Rakimi ayarla (metre)
+  sensors.setSoilCalibration(SOIL_WET_VALUE, SOIL_DRY_VALUE);
   
-  // BH1750 isik sensoru baslat
-  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
-    Serial.println(F("OK BH1750 basariyla baslatildi"));
-  } else {
-    Serial.println(F("HATA BH1750 baslamadi! I2C baglantisini kontrol edin."));
-    Serial.println(F("  Varsayilan adres: 0x23 veya 0x5C"));
-  }
-  
-  // BME680 sensoru baslat - Once 0x77, sonra 0x76 dene
-  bool bme680Found = false;
-  
-  Serial.println(F("BME680 0x77 adresinde deneniyor..."));
-  if (bme.begin(0x77, &Wire)) {
-    Serial.println(F("OK BME680 0x77 adresinde bulundu"));
-    bme680Found = true;
-  } else {
-    Serial.println(F("0x77'de bulunamadi, 0x76 deneniyor..."));
-    delay(100);
-    if (bme.begin(0x76, &Wire)) {
-      Serial.println(F("OK BME680 0x76 adresinde bulundu"));
-      bme680Found = true;
-    }
-  }
-  
-  if (bme680Found) {
-    // BME680 ayarlarini yapilandir
-    bme.setTemperatureOversampling(BME680_OS_8X);
-    bme.setHumidityOversampling(BME680_OS_2X);
-    bme.setPressureOversampling(BME680_OS_4X);
-    bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
-    bme.setGasHeater(320, 150); // 320°C, 150 ms
-    
-    Serial.println(F("  BME680 parametreleri ayarlandi"));
-    
-    // Ilk okuma - sensoru hazirla
-    delay(100);
-    bme.performReading();
-  } else {
-    Serial.println(F("HATA BME680 bulunamadi! I2C baglantisini kontrol edin."));
-    Serial.println(F("  Olasi adres: 0x76 veya 0x77"));
-  }
-  
-  // MH-Z14A CO2 sensoru test
-  Serial.println(F("MH-Z14A CO2 sensoru test ediliyor..."));
-  Serial.println(F("  UART: Serial1 (9600 baud)"));
-  Serial.println(F("  Arduino RX1 (D19) -> MH-Z14A TX"));
-  Serial.println(F("  Arduino TX1 (D18) -> MH-Z14A RX"));
-  Serial.println(F("  *** ISINMA SURESI: 3-5 dakika ***"));
-  Serial.println(F("  *** Ilk okumalar yanlis olabilir ***"));
-  
-  // Ilk okuma (sicak acma gecikmesi)
-  delay(100);
-  int testCO2 = getMHZ14ACO2();
-  if (testCO2 > 0 && testCO2 < 5000) {
-    Serial.print(F("OK MH-Z14A yanit veriyor. CO2: "));
-    Serial.print(testCO2);
-    Serial.println(F(" ppm"));
-  } else {
-    Serial.println(F("UYARI MH-Z14A dogru yanit vermiyor"));
-    Serial.println(F("  Kontrol: UART baglantisi, guc, sensor isinmasi"));
-  }
-  
-  Serial.println();
+  Serial.println(F("*** Kalman Filtresi AKTIF ***"));
+  Serial.println(F("*** Her sensor hem RAW hem FILTRELENMİŞ deger verecek ***\n"));
 }
 
 // BH1750 isik sensorunu okuma fonksiyonu
@@ -647,10 +575,13 @@ void controlIrrigation() {
 
 // Sulama gereksinimi kontrolu
 bool checkIrrigationNeeded() {
-  float temp = bme.temperature;
-  float humidity = bme.humidity;
-  float pressure = bme.pressure / 100.0;
-  float lux = lightMeter.readLightLevel();
+  // Sensors modulunden filtrelenmis degerleri al
+  SensorReadings& readings = sensors.getReadings();
+  float temp = readings.temperature_filtered;
+  float humidity = readings.humidity_filtered;
+  float pressure = readings.pressure_filtered;
+  float lux = readings.lux_filtered;
+  float soilMoisturePercent = readings.soil_moisture_percent_filtered;
   
   // ============================================
   // SULAMA KODU 5: ASIRI SULAMA KORUMASI
@@ -1028,72 +959,35 @@ float co2PpmToMgPerM3(int ppm, float temp, float pressure) {
 // ========================================
 
 // LoRa modulu baslatma
-void initLoRa() {
-  Serial.println(F("\n--- LoRa E32 Modulu Baslatiliyor ---"));
-  
-  // M0 ve M1 pinlerini ayarla (Normal mod: LOW, LOW)
-  pinMode(LORA_M0_PIN, OUTPUT);
-  pinMode(LORA_M1_PIN, OUTPUT);
-  digitalWrite(LORA_M0_PIN, LOW);  // NORMAL MODE
-  digitalWrite(LORA_M1_PIN, LOW);
-  delay(50);
-  
-  // LoRa modulu baslat
-  e32ttl100.begin();
-  
-  Serial.print(F("LoRa VERICI hazir. Paket boyutu: "));
-  Serial.println((int)sizeof(SensorDataPacket));
-  Serial.print(F("LoRa RX Pin: 10, TX Pin: 11"));
-  Serial.println(F("\nLoRa M0=LOW, M1=LOW (Normal Mode)"));
-  Serial.println();
-}
-
-// CRC hesaplama fonksiyonu
-uint16_t calcCRC(const SensorDataPacket& packet) {
-  uint16_t crc = 0;
-  const uint8_t* ptr = (const uint8_t*)&packet;
-  // CRC alanı hariç tüm baytları topla
-  for (size_t i = 0; i < sizeof(SensorDataPacket) - sizeof(packet.crc); i++) {
-    crc += ptr[i];
-  }
-  return crc;
-}
-
-// HEX dump fonksiyonu (debug icin)
-void hexDump(const uint8_t *data, size_t len) {
-  for (size_t i = 0; i < len; i++) {
-    if (data[i] < 16) Serial.print("0");
-    Serial.print(data[i], HEX);
-    Serial.print(" ");
-    if ((i + 1) % 16 == 0) Serial.println();
-  }
-  Serial.println();
-}
-
 // LoRa ile veri gonderme fonksiyonu
 void sendLoRaData() {
   // Veri paketini olustur
   SensorDataPacket packet;
   
-  // BME680 verileri
-  packet.temperature = bme.temperature;
-  packet.humidity = bme.humidity;
-  packet.pressure = bme.pressure / 100.0;  // Pa -> hPa
-  packet.gas_resistance = bme.gas_resistance / 1000.0;  // ohm -> Kohm
+  // Sensör okumalarını al (Kalman filtreli değerler)
+  SensorReadings& readings = sensors.getReadings();
   
-  // BH1750 verileri
-  packet.lux = lightMeter.readLightLevel();
+  // BME680 verileri (FİLTRELİ değerler)
+  packet.temperature = readings.temperature_filtered;
+  packet.humidity = readings.humidity_filtered;
+  packet.pressure = readings.pressure_filtered;
+  packet.gas_resistance = readings.gas_resistance_filtered;
   
-  // MH-Z14A verileri
-  packet.co2_ppm = (uint16_t)co2ppm;
-  packet.co2_temperature = (int8_t)co2Temperature;
+  // BH1750 verileri (FİLTRELİ)
+  packet.lux = readings.lux_filtered;
   
-  // Toprak nem verileri
-  packet.soil_moisture_percent = soilMoisturePercent;
-  packet.soil_moisture_raw = (uint16_t)soilMoistureRaw;
+  // MH-Z14A verileri (FİLTRELİ)
+  packet.co2_ppm = (uint16_t)readings.co2_ppm_filtered;
+  packet.co2_temperature = (int8_t)readings.co2_temperature;
+  
+  // Toprak nem verileri (FİLTRELİ)
+  packet.soil_moisture_percent = readings.soil_moisture_percent_filtered;
+  packet.soil_moisture_raw = (uint16_t)readings.soil_moisture_raw;
   
   // Kontrol durumlari
   packet.roof_position = (uint8_t)currentRoofPosition;
+  packet.fan_state = fanOn ? 1 : 0;
+  packet.light_state = lightOn ? 1 : 0;
   packet.pump_state = isPumpOn ? 1 : 0;
   if (isPumpOn) {
     unsigned long elapsedTime = (millis() - pumpStartTime) / 1000;
@@ -1111,50 +1005,183 @@ void sendLoRaData() {
   packet.uptime = millis() / 1000;  // saniye cinsinden
   packet.mhz14a_ready = mhz14aReady ? 1 : 0;
   
-  // CRC hesapla
-  packet.crc = calcCRC(packet);
+  // CRC hesapla (Communication modulu ile)
+  packet.crc = comm.calcCRC(packet);
   
-  // Debug bilgileri
-  Serial.println(F("\n>>> LORA VERI GONDERIMI <<<"));
-  Serial.print(F("Paket Boyutu: "));
-  Serial.print((int)sizeof(SensorDataPacket));
-  Serial.println(F(" byte"));
-  
-  Serial.println(F("\n[DEBUG] Gonderilecek Paket Ozeti:"));
-  Serial.print(F("  Sicaklik: "));
-  Serial.print(packet.temperature, 1);
-  Serial.println(F(" C"));
-  Serial.print(F("  Nem: "));
-  Serial.print(packet.humidity, 1);
-  Serial.println(F(" %"));
-  Serial.print(F("  CO2: "));
-  Serial.print(packet.co2_ppm);
-  Serial.println(F(" ppm"));
-  Serial.print(F("  Toprak Nem: "));
-  Serial.print(packet.soil_moisture_percent, 1);
-  Serial.println(F(" %"));
-  Serial.print(F("  Sera Kapak: "));
-  Serial.print(packet.roof_position);
-  Serial.println(F(" %"));
-  Serial.print(F("  Sulama: "));
-  Serial.println(packet.pump_state ? F("ACIK") : F("KAPALI"));
-  Serial.print(F("  CRC: 0x"));
-  Serial.println(packet.crc, HEX);
-  
-  Serial.println(F("\n[DEBUG] HEX Dump:"));
-  hexDump((uint8_t*)&packet, sizeof(packet));
-  
-  // LoRa ile gonder
-  ResponseStatus rs = e32ttl100.sendMessage((uint8_t*)&packet, sizeof(packet));
-  
-  Serial.print(F("[LORA] Gonderim Sonucu: "));
-  Serial.println(rs.getResponseDescription());
-  
-  if (rs.code == 1) {
-    Serial.println(F("[LORA] *** PAKET BASARIYLA GONDERILDI ***"));
-  } else {
-    Serial.println(F("[LORA] !!! GONDERIM HATASI !!!"));
+  // LoRa ile gonder (Communication modulu ile)
+  comm.sendLoRaPacket(packet);
+}
+
+// ========================================
+// SERIAL KOMUT ISLEME FONKSIYONU
+// ========================================
+void processSerialCommand() {
+  // Serial'den veri gelirse oku
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+    
+    // Enter veya bosluk karakterinde komutu isle
+    if (c == '\n' || c == '\r' || c == ' ') {
+      if (serialCommand.length() > 0) {
+        // Stringi trim et ve kucuk harfe cevir
+        serialCommand.trim();
+        serialCommand.toLowerCase();
+        
+        Serial.print(F("[DEBUG] Alinan komut: "));
+        Serial.println(serialCommand);
+        
+        // Komut isleme - Sozel komutlar
+        if (serialCommand == "havaac") {
+          // Kapak AC + Fan AC
+          Serial.println(F("\n>>> KOMUT: HAVA AC (Kapak + Fan) <<<"));
+          if (currentServoPosition != 0) {
+            mg995.attach(SERVO_PIN);    // Servo'yu aktif et
+            mg995.write(0);              // Kapak acik (0 derece)
+            delay(1000);                 // Servo hareket etsin (1 saniye)
+            mg995.detach();              // PWM sinyalini kes
+            currentServoPosition = 0;
+            currentRoofPosition = 100;   // Otomatik kontrol ile senkronize et
+            Serial.println(F("[OK] Kapak acildi (0 derece)"));
+          } else {
+            Serial.println(F("[INFO] Kapak zaten acik"));
+          }
+          digitalWrite(FAN_RELAY_PIN, LOW);  // Fan ac (LOW=acik)
+          roofOpen = true;
+          fanOn = true;
+          Serial.println(F("[OK] Fan acildi"));
+          serialCommand = "";  // Komutu temizle
+          
+        } else if (serialCommand == "havakapa") {
+          // Kapak KAPAT + Fan KAPAT
+          Serial.println(F("\n>>> KOMUT: HAVA KAPA (Kapak + Fan) <<<"));
+          if (currentServoPosition != 95) {
+            mg995.attach(SERVO_PIN);     // Servo'yu aktif et
+            mg995.write(95);             // Kapak kapali (95 derece)
+            delay(1000);                 // Servo hareket etsin (1 saniye)
+            mg995.detach();              // PWM sinyalini kes
+            currentServoPosition = 95;
+            currentRoofPosition = 0;     // Otomatik kontrol ile senkronize et
+            Serial.println(F("[OK] Kapak kapatildi (95 derece)"));
+          } else {
+            Serial.println(F("[INFO] Kapak zaten kapali"));
+          }
+          digitalWrite(FAN_RELAY_PIN, HIGH);  // Fan kapat (HIGH=kapali)
+          roofOpen = false;
+          fanOn = false;
+          Serial.println(F("[OK] Fan kapatildi"));
+          serialCommand = "";  // Komutu temizle
+          
+        } else if (serialCommand == "isikac") {
+          // Isik AC
+          Serial.println(F("\n>>> KOMUT: ISIK AC <<<"));
+          digitalWrite(LIGHT_RELAY_PIN, LOW);  // Isik ac (LOW=acik)
+          lightOn = true;
+          Serial.println(F("[OK] Isik acildi"));
+          serialCommand = "";  // Komutu temizle
+          
+        } else if (serialCommand == "isikkapa") {
+          // Isik KAPAT
+          Serial.println(F("\n>>> KOMUT: ISIK KAPA <<<"));
+          digitalWrite(LIGHT_RELAY_PIN, HIGH);  // Isik kapat (HIGH=kapali)
+          lightOn = false;
+          Serial.println(F("[OK] Isik kapatildi"));
+          serialCommand = "";  // Komutu temizle
+          
+        } else if (serialCommand == "sulaac") {
+          // Sulama AC - Once mevcut durumlari kaydet
+          Serial.println(F("\n>>> KOMUT: SULAMA AC <<<"));
+          
+          // Mevcut durumlari kaydet
+          savedRoofOpen = roofOpen;
+          savedFanOn = fanOn;
+          savedLightOn = lightOn;
+          savedServoPosition = currentServoPosition;
+          
+          Serial.println(F("[INFO] Mevcut sistem durumlari kaydedildi"));
+          
+          // Tum sistemleri kapat (guvenlik icin)
+          // 1. Kapak kapat + Fan kapat
+          if (roofOpen || fanOn) {
+            mg995.attach(SERVO_PIN);
+            mg995.write(95);  // Kapak kapat
+            delay(1000);
+            mg995.detach();
+            currentServoPosition = 95;
+            digitalWrite(FAN_RELAY_PIN, HIGH);  // Fan kapat
+            roofOpen = false;
+            fanOn = false;
+            Serial.println(F("[GUVENLIK] Kapak ve fan kapatildi"));
+          }
+          
+          // 2. Isik kapat
+          if (lightOn) {
+            digitalWrite(LIGHT_RELAY_PIN, HIGH);
+            lightOn = false;
+            Serial.println(F("[GUVENLIK] Isik kapatildi"));
+          }
+          
+          // 3. Sulama ac
+          digitalWrite(PUMP_RELAY_PIN, LOW);  // Pompa ac (LOW=acik)
+          pumpOn = true;
+          Serial.println(F("[OK] Sulama baslatildi"));
+          Serial.println(F("[BILGI] Diger tum sistemler geri yuklenmeyi bekliyor..."));
+          serialCommand = "";  // Komutu temizle
+          
+        } else if (serialCommand == "sulakapa") {
+          // Sulama KAPAT - Onceki durumlari geri yukle
+          Serial.println(F("\n>>> KOMUT: SULAMA KAPA <<<"));
+          
+          // Sulama pompasini kapat
+          digitalWrite(PUMP_RELAY_PIN, HIGH);  // Pompa kapat (HIGH=kapali)
+          pumpOn = false;
+          Serial.println(F("[OK] Sulama durduruldu"));
+          
+          delay(500);  // Sistemin stabilize olmasi icin kisa bekleme
+          
+          Serial.println(F("[INFO] Onceki sistem durumlari geri yukleniyor..."));
+          
+          // 1. Kapak ve Fan durumunu geri yukle
+          if (savedRoofOpen || savedFanOn) {
+            mg995.attach(SERVO_PIN);
+            mg995.write(savedServoPosition);
+            delay(1000);
+            mg995.detach();
+            currentServoPosition = savedServoPosition;
+            
+            if (savedFanOn) {
+              digitalWrite(FAN_RELAY_PIN, LOW);  // Fan ac
+              fanOn = true;
+              Serial.println(F("[GERI YUKLEME] Fan acildi"));
+            }
+            
+            if (savedRoofOpen) {
+              roofOpen = true;
+              Serial.println(F("[GERI YUKLEME] Kapak acildi"));
+            }
+          }
+          
+          // 2. Isik durumunu geri yukle
+          if (savedLightOn) {
+            digitalWrite(LIGHT_RELAY_PIN, LOW);  // Isik ac
+            lightOn = true;
+            Serial.println(F("[GERI YUKLEME] Isik acildi"));
+          }
+          
+          Serial.println(F("[OK] Tum sistemler onceki durumuna geri yuklendi"));
+          serialCommand = "";  // Komutu temizle
+          
+        } else {
+          // Gecersiz komut - sadece uyari ver, hicbir sey yapma
+          Serial.print(F("\n[UYARI] Bilinmeyen komut: '"));
+          Serial.print(serialCommand);
+          Serial.println(F("'"));
+          Serial.println(F("Gecerli komutlar: havaac, havakapa, isikac, isikkapa, sulaac, sulakapa"));
+          serialCommand = "";  // Komutu temizle
+        }
+      }
+    } else if (c >= 32 && c <= 126) {
+      // Sadece yazdırılabilir karakterleri ekle (ASCII 32-126)
+      serialCommand += c;
+    }
   }
-  
-  Serial.println(F(">>> LORA GONDERIM BITTI <<<\n"));
 }

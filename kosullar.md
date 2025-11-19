@@ -1,6 +1,39 @@
 # Akıllı Sera Sistemi - Kontrol Koşulları
 
-## 🌱 Sera Üst Kapak Açma/Kapama Koşulları
+## 🎮 Kontrol Modları
+
+### 1. OTOMATIK MOD
+Sistem sensör verilerine göre otomatik kararlar verir (aşağıdaki tüm koşullar aktif).
+
+### 2. MANUEL MOD  
+Kullanıcı serial port üzerinden komutlarla sistemi kontrol eder:
+
+**Serial Komutlar:**
+```
+havaac    → Sera kapağını aç (0°) + Fan açık
+havakapa  → Sera kapağını kapat (95°) + Fan kapalı
+isikac    → Aydınlatmayı aç
+isikkapa  → Aydınlatmayı kapat
+sulaac    → Sulamayı aç
+sulakapa  → Sulamayı kapat
+```
+
+**Kullanım:** Serial Monitor'da (115200 baud) komutu yazıp Enter'a basın.
+
+**⚠️ Önemli - Sulama Güvenlik Modu:**
+- `sulaac` komutu verildiğinde:
+  - Mevcut sistem durumları otomatik kaydedilir
+  - Kapak kapatılır + Fan kapatılır
+  - Işık kapatılır
+  - Sulama başlatılır
+  
+- `sulakapa` komutu verildiğinde:
+  - Sulama durdurulur
+  - Tüm sistemler önceki durumuna geri döner
+
+---
+
+## 🌱 Sera Üst Kapak Açma/Kapama Koşulları (OTOMATIK MOD)
 
 ### 📊 Mevcut Sensör Verileri:
 - **Sıcaklık** (BME680): °C
