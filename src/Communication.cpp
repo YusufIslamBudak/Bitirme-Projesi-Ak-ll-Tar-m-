@@ -37,11 +37,11 @@ void Communication::initLoRa() {
 
 // Initialize NodeMCU communication (Serial2)
 void Communication::initNodeMCU() {
-  Serial2.begin(115200);  // NodeMCU ile 115200 baud
+  Serial2.begin(9600);  // NodeMCU SoftwareSerial ile 9600 baud (KARARLI)
   delay(100);
   
   Serial.println(F("\n--- NodeMCU Haberlesme Baslatiliyor ---"));
-  Serial.println(F("Serial2 (TX2=D16, RX2=D17) - 115200 baud"));
+  Serial.println(F("Serial2 (TX2=D16, RX2=D17) - 9600 baud"));
   Serial.println(F("NodeMCU Format: JSON (Firebase Optimize)"));
   Serial.println();
   

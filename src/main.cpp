@@ -135,6 +135,8 @@ void setup() {
   comm.initLoRa();
   
   // NodeMCU haberlesme baslat (Serial2 - JSON format)
+  // NOT: NodeMCU tamamen baslayana kadar Serial2'yi KAPATIYORUZ
+  delay(3000);  // NodeMCU'nun boot olmasini bekle
   comm.initNodeMCU();
   
   // Kontrol pinlerini baslat

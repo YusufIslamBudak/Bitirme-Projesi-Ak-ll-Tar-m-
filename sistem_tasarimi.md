@@ -182,10 +182,16 @@ ARDUINO MEGA 2560 (VERİCİ SİSTEMİ)
 ├─ UART1 (D18/TX1, D19/RX1)
 │  └─ MH-Z14A CO2 Sensor
 │
+├─ UART2 (D16/TX2, D17/RX2)
+│  └─ NodeMCU ESP8266 (9600 baud, JSON)
+│     - SoftwareSerial (NodeMCU D1=GPIO5)
+│     - Firebase Realtime Database
+│     - SD Kart veri kaydetme
+│
 ├─ Software Serial (D10/RX, D11/TX)
 │  └─ LoRa E32 Modülü (Verici)
 │     - M0 → D6
-│     - M1 → D7 (LoRa kontrol pini)
+│     - M1 → D8 (LoRa kontrol pini)
 │
 ├─ Analog Input
 │  └─ A0 → MH Water Sensor
@@ -205,8 +211,16 @@ ARDUINO (ALICI - YER İSTASYONU)
 └─ Software Serial (D10/RX, D11/TX)
    └─ LoRa E32 Modülü (Alıcı)
       - M0 → D6
-      - M1 → D7
+      - M1 → D8
       - Serial Monitor → USB (9600 baud)
+
+         ↓↓↓ WiFi / İnternet ↓↓↓
+
+FIREBASE & SD KART SİSTEMİ
+│
+└─ NodeMCU ESP8266
+   ├─ Firebase Realtime Database (Bulut)
+   └─ SD Kart Modülü (Yerel)
 ```
 
 ---
