@@ -2,7 +2,7 @@
 
 // Constructor
 Communication::Communication(LoRa_E32& lora, int m0Pin, int m1Pin) 
-  : _lora(lora), _m0Pin(m0Pin), _m1Pin(m1Pin) {
+  : _lora(lora), _m0Pin(m0Pin), _m1Pin(m1Pin), _jsonFormatter() {
 }
 
 // Initialize serial communication
@@ -31,7 +31,22 @@ void Communication::initLoRa() {
   Serial.println((int)sizeof(SensorDataPacket));
   Serial.print(F("LoRa RX Pin: 10, TX Pin: 11"));
   Serial.println(F("\nLoRa M0=LOW, M1=LOW (Normal Mode)"));
+  Serial.println(F("LoRa Format: JSON (Yeni)"));
   Serial.println();
+}
+
+// Initialize NodeMCU communication (Serial2)
+void Communication::initNodeMCU() {
+  Serial2.begin(115200);  // NodeMCU ile 115200 baud
+  delay(100);
+  
+  Serial.println(F("\n--- NodeMCU Haberlesme Baslatiliyor ---"));
+  Serial.println(F("Serial2 (TX2=D16, RX2=D17) - 115200 baud"));
+  Serial.println(F("NodeMCU Format: JSON (Firebase Optimize)"));
+  Serial.println();
+  
+  // Test mesajı gönder
+  Serial2.println(F("{\"status\":\"Arduino Mega Ready\"}"));
 }
 
 // Print system header
@@ -171,4 +186,61 @@ bool Communication::sendLoRaPacket(const SensorDataPacket& packet) {
   Serial.println(F(">>> LORA GONDERIM BITTI <<<\n"));
   
   return success;
+}
+
+// Send LoRa packet (JSON format - NEW)
+bool Communication::sendLoRaJSON(const char* jsonString) {
+  Serial.println(F("\n>>> LORA JSON GONDERIMI <<<"));
+  
+  // JSON boyutunu kontrol et
+  uint16_t jsonSize = strlen(jsonString);
+  Serial.print(F("JSON Boyutu: "));
+  Serial.print(jsonSize);
+  Serial.println(F(" byte"));
+  
+  // JSON'ı yazdır
+  Serial.println(F("\n[DEBUG] JSON Verisi:"));
+  Serial.println(jsonString);
+  
+  // LoRa maksimum paket boyutu kontrolü (genelde 200-240 byte)
+  if (jsonSize > 200) {
+    Serial.println(F("[LORA] !!! JSON cok buyuk, gonderim iptal !!!"));
+    Serial.println(F(">>> LORA GONDERIM BITTI <<<\n"));
+    return false;
+  }
+  
+  // Send via LoRa
+  ResponseStatus rs = _lora.sendMessage((uint8_t*)jsonString, jsonSize);
+  
+  Serial.print(F("[LORA] Gonderim Sonucu: "));
+  Serial.println(rs.getResponseDescription());
+  
+  bool success = (rs.code == 1);
+  if (success) {
+    Serial.println(F("[LORA] *** JSON BASARIYLA GONDERILDI ***"));
+  } else {
+    Serial.println(F("[LORA] !!! GONDERIM HATASI !!!"));
+  }
+  
+  Serial.println(F(">>> LORA GONDERIM BITTI <<<\n"));
+  
+  return success;
+}
+
+// Send to NodeMCU (Serial2 - JSON format)
+void Communication::sendToNodeMCU(const char* jsonString) {
+  Serial.println(F("\n>>> NodeMCU'YA VERI GONDERIMI <<<"));
+  
+  // JSON boyutunu göster
+  uint16_t jsonSize = strlen(jsonString);
+  Serial.print(F("JSON Boyutu: "));
+  Serial.print(jsonSize);
+  Serial.println(F(" byte"));
+  
+  // JSON'ı Serial2'ye gönder (NodeMCU)
+  Serial2.println(jsonString);
+  
+  // Doğrulama
+  Serial.println(F("[Serial2] JSON NodeMCU'ya gonderildi"));
+  Serial.println(F(">>> NodeMCU GONDERIM BITTI <<<\n"));
 }

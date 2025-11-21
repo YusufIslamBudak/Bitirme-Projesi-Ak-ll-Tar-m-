@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "LoRa_E32.h"
+#include "JSONFormatter.h"
 
 // LoRa veri paketi yapisi
 #pragma pack(push, 1)
@@ -53,6 +54,7 @@ public:
   // Initialization
   void begin();
   void initLoRa();
+  void initNodeMCU();  // Serial2 başlatma (NodeMCU için)
   
   // Serial operations
   void printHeader();
@@ -64,9 +66,15 @@ public:
   void printError(const String& message);
   void printSuccess(const String& message);
   
-  // LoRa operations
+  // LoRa operations (Binary - Eski format)
   bool sendLoRaPacket(const SensorDataPacket& packet);
   void printPacketSummary(const SensorDataPacket& packet);
+  
+  // LoRa operations (JSON - Yeni format)
+  bool sendLoRaJSON(const char* jsonString);
+  
+  // NodeMCU operations (Serial2 - JSON)
+  void sendToNodeMCU(const char* jsonString);
   
   // Utility functions
   uint16_t calcCRC(const SensorDataPacket& packet);
@@ -76,6 +84,7 @@ private:
   LoRa_E32& _lora;
   int _m0Pin;
   int _m1Pin;
+  JSONFormatter _jsonFormatter;  // JSON formatter nesnesi
 };
 
 #endif // COMMUNICATION_H

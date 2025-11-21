@@ -24,8 +24,8 @@ Serial port üzerinden komutlarla anlık kontrol:
 ```
 havaac    → Sera kapağını aç (0°) + Fan açık
 havakapa  → Sera kapağını kapat (95°) + Fan kapalı
-isikac    → Aydınlatmayı aç (D7)
-isikkapa  → Aydınlatmayı kapat (D7)
+isikac    → Aydınlatmayı aç (D29)
+isikkapa  → Aydınlatmayı kapat (D29)
 sulaac    → Sulamayı aç (D31)
 sulakapa  → Sulamayı kapat (D31)
 ```
@@ -154,11 +154,12 @@ sulakapa  → Sulamayı kapat (D31)
   - Manuel kontrol ile bağımsız çalıştırılabilir
   
 #### c) Aydınlatma Rölesi
-- **Pin:** D7
+- **Pin:** D29 (Active LOW)
 - **Kontrol:** Dijital (LOW=Açık, HIGH=Kapalı)
 - **Kullanım:**
   - Otomatik: Işık < 200 lux → Açık
-  - Manuel: Komut 2/-2 ile kontrol
+  - Manuel: Komut isikac/isikkapa ile kontrol
+- **Not:** D7'den D29'a taşındı (LoRa M1 pin çakışması önlendi)
   
 #### d) Sulama Pompası Rölesi
 - **Pin:** D31 (D10'dan taşındı - LoRa çakışması çözüldü)
@@ -193,8 +194,8 @@ ARDUINO MEGA 2560 (VERİCİ SİSTEMİ)
 │  └─ D9 → MG995 Servo Motor (Sera Kapağı)
 │
 └─ Digital Outputs (Aktuatörler)
+   ├─ D29 → Röle (Işık) - Active LOW
    ├─ D30 → Röle (Fan) - Active LOW
-   ├─ D7 → Röle (Işık) - Active LOW
    └─ D31 → Röle (Sulama Pompası) - Active LOW
 
          ↓↓↓ LoRa 433MHz Kablosuz ↓↓↓
@@ -511,7 +512,7 @@ Soil Moisture: 100.00 % (RAW) | 88.36 % (FILTERED)
 - **Mod:**
   - **Otomatik:** Kalman filtreli ışık sensörü verilerine göre (gelecekte eklenebilir)
   - **Manuel:** Seri port komutları (isikac/isikkapa)
-- **Pin:** D7 (Active LOW)
+- **Pin:** D29 (Active LOW) - D7'den taşındı
 
 #### c) Sulama Kontrolü
 - **Girdi:** Toprak Nemi (FILTERED), Sıcaklık (FILTERED), Hava Nemi (FILTERED), Işık (FILTERED)
