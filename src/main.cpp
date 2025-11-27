@@ -9,8 +9,6 @@
 #include "Sensors.h"           // Sensor modulu (Kalman filtreli)
 #include "JSONFormatter.h"     // JSON formatter modulu
 #include "SerialCommands.h"    // Serial komut isleme modulu
-#include "GreenhouseControl.h" // Sera kontrol modulu
-#include "IrrigationControl.h" // Sulama kontrol modulu
 
 // I2C Pin tanimlari (Arduino Mega icin D20=SDA, D21=SCL)
 #define I2C_SDA 20
@@ -65,12 +63,6 @@ bool mhz14aReady = false;            // Sensor hazir mi?
 int soilMoistureRaw = 0;        // Ham analog deger
 float soilMoisturePercent = 0;  // Yuzde cinsinden nem
 
-// Global degiskenler - Sera Kontrol
-int currentRoofPosition = 0;         // Mevcut kapak pozisyonu (0=kapali, 100=tamamen acik)
-unsigned long lastRoofAction = 0;    // Son kapak hareketi zamani
-#define ROOF_ACTION_DELAY 30000      // Kapak hareketleri arasi minimum 30 saniye
-String lastRoofReason = "System Start"; // Son kapak hareketi sebebi
-
 // Serial Komut Kontrol Degiskenleri
 String serialCommand = "";           // Gelen komut
 bool roofOpen = false;                // Kapak durumu
@@ -85,16 +77,6 @@ bool savedFanOn = false;              // Sulama oncesi fan durumu
 bool savedLightOn = false;            // Sulama oncesi isik durumu
 int savedServoPosition = 95;          // Sulama oncesi servo pozisyonu
 
-// Global degiskenler - Sulama Kontrol
-bool isPumpOn = false;                      // Pompa durumu
-unsigned long pumpStartTime = 0;            // Pompa acilma zamani
-unsigned long lastIrrigationCheck = 0;      // Son sulama kontrolu
-#define IRRIGATION_CHECK_INTERVAL 10000     // Her 10 saniyede sulama kontrolu
-#define IRRIGATION_LOCKOUT_TIME 600000      // Sulama sonrasi 10 dakika bekleme
-unsigned long irrigationLockoutUntil = 0;   // Sulama kilidi bitiş zamani
-int irrigationDuration = 0;                 // Sulama suresi (saniye)
-String lastIrrigationReason = "System Start"; // Son sulama sebebi
-
 // Fonksiyon prototipleri
 void initSensors();
 void readBH1750();
@@ -102,7 +84,6 @@ void readBME680();
 void readMHZ14A();
 void readSoilMoisture();
 int getMHZ14ACO2();
-void printSensorData();
 void sendLoRaData();
 
 // Bilimsel hesaplama fonksiyonlari
@@ -191,13 +172,6 @@ void loop() {
     // Sensors modulu ile tum sensor okumalarini yap (Kalman filtreli)
     sensors.readAllSensors();
     sensors.updateMHZ14AWarmup();
-    
-    // Sera kontrol (sadece otomatik modda)
-    // Manuel kontrolde servo karismamasi icin devre disi
-    // controlGreenhouse();
-    
-    // Sulama kontrol - OTOMATIK YONETIM DEVRE DISI
-    // controlIrrigation();
     
     // LoRa ile veri gonder (Communication modulu ile)
     sendLoRaData();
@@ -510,35 +484,7 @@ int getMHZ14ACO2() {
   return co2Value;
 }
 
-// Sensor verilerini ozetleyen fonksiyon
-void printSensorData() {
-  Serial.println(F("================================="));
-  Serial.print(F("Uptime: "));
-  Serial.print(millis() / 1000);
-  Serial.println(F(" saniye"));
-  
-  // Sera durumu
-  Serial.print(F("Sera Kapagi: "));
-  Serial.print(currentRoofPosition);
-  Serial.print(F("% - "));
-  Serial.println(lastRoofReason);
-  
-  // Sulama durumu
-  Serial.print(F("Sulama Pompasi: "));
-  if (isPumpOn) {
-    unsigned long elapsedTime = (millis() - pumpStartTime) / 1000;
-    Serial.print(F("ACIK ("));
-    Serial.print(elapsedTime);
-    Serial.print(F("/"));
-    Serial.print(irrigationDuration);
-    Serial.println(F(" sn)"));
-  } else {
-    Serial.print(F("KAPALI - "));
-    Serial.println(lastIrrigationReason);
-  }
-  
-  Serial.println(F("================================="));
-}
+
 
 // ========================================
 // BILIMSEL HESAPLAMA FONKSIYONLARI
@@ -648,6 +594,9 @@ void sendLoRaData() {
   
   // JSON formatinda veri hazirlama
   // LoRa icin COMPACT JSON kullan (filtrelenmis veriler, max 200 byte)
+  // Kapak pozisyonu: servo pozisyonundan hesapla (95=0%, 0=100%)
+  int roofPositionPercent = map(currentServoPosition, 95, 0, 0, 100);
+  
   const char* loraJson = jsonFormatter.createCompactJSON(
     readings.temperature_filtered,
     readings.humidity_filtered,
@@ -656,10 +605,10 @@ void sendLoRaData() {
     readings.lux_filtered,
     (int)readings.co2_ppm_filtered,
     readings.soil_moisture_percent_filtered,
-    currentRoofPosition,
+    roofPositionPercent,
     fanOn,
     lightOn,
-    isPumpOn,
+    pumpOn,
     millis() / 1000
   );
   
@@ -677,10 +626,10 @@ void sendLoRaData() {
     readings.soil_moisture_percent_filtered,
     calculateDewPoint(bme.temperature, bme.humidity),
     calculateHeatIndex(bme.temperature, bme.humidity),
-    currentRoofPosition,
+    roofPositionPercent,
     fanOn,
     lightOn,
-    isPumpOn,
+    pumpOn,
     millis() / 1000
   );
   

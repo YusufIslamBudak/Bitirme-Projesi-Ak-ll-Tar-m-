@@ -8,7 +8,6 @@ extern bool fanOn;
 extern bool lightOn;
 extern bool pumpOn;
 extern int currentServoPosition;
-extern int currentRoofPosition;
 extern bool savedRoofOpen;
 extern bool savedFanOn;
 extern bool savedLightOn;
@@ -81,7 +80,6 @@ void executeCommand(String& cmd) {
       delay(1000);                 // Servo hareket etsin (1 saniye)
       mg995.detach();              // PWM sinyalini kes
       currentServoPosition = 0;
-      currentRoofPosition = 100;   // Otomatik kontrol ile senkronize et
       Serial.println(F("[OK] Kapak acildi (0 derece)"));
     } else {
       Serial.println(F("[INFO] Kapak zaten acik"));
@@ -101,7 +99,6 @@ void executeCommand(String& cmd) {
       delay(1000);                 // Servo hareket etsin (1 saniye)
       mg995.detach();              // PWM sinyalini kes
       currentServoPosition = 95;
-      currentRoofPosition = 0;     // Otomatik kontrol ile senkronize et
       Serial.println(F("[OK] Kapak kapatildi (95 derece)"));
     } else {
       Serial.println(F("[INFO] Kapak zaten kapali"));
