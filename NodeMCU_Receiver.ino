@@ -43,6 +43,43 @@ bool jsonComplete = false;
 // Son alinan sensor verileri (Web interface icin)
 String lastSensorData = "Henuz veri yok...";
 
+// ========================================
+// SENSOR VERİLERİ YAPISI
+// ========================================
+struct SensorData {
+  float temperature;      // Sıcaklık (°C)
+  float humidity;         // Nem (%)
+  float pressure;         // Basınç (hPa)
+  float lux;              // Işık şiddeti (lux)
+  int co2;                // CO2 (ppm)
+  float soilMoisture;     // Toprak nem (%)
+  float dewPoint;         // Çiy noktası (°C)
+  float heatIndex;        // Hissedilen sıcaklık (°C)
+  bool roofOpen;          // Kapak durumu
+  bool fanOn;             // Fan durumu
+  bool lightOn;           // Işık durumu
+  bool pumpOn;            // Pompa durumu
+  unsigned long timestamp; // Zaman damgası
+};
+
+SensorData currentSensors = {0};
+
+// ========================================
+// KARAR AĞACI AYARLARI
+// ========================================
+bool autoControlEnabled = true;  // Otomatik kontrol aktif mi?
+unsigned long lastDecisionTime = 0;
+const unsigned long DECISION_INTERVAL = 10000; // Her 10 saniyede bir karar ver
+
+// Son gönderilen komutları takip et (tekrar önleme)
+String lastRoofCommand = "";
+String lastLightCommand = "";
+String lastWaterCommand = "";
+unsigned long lastRoofCommandTime = 0;
+unsigned long lastLightCommandTime = 0;
+unsigned long lastWaterCommandTime = 0;
+const unsigned long COMMAND_COOLDOWN = 30000; // Aynı komut 30 saniye içinde tekrar gönderilmez
+
 // Fonksiyon prototipleri (Forward declarations)
 void sendCommandToArduino(String command);
 void handleRoot();
@@ -50,6 +87,12 @@ void handleCommand();
 void handleStatus();
 void handleNotFound();
 String getFormattedTime();
+float parseJsonFloat(String json, String key);
+int parseJsonInt(String json, String key);
+bool parseJsonBool(String json, String key);
+void parseSensorData(String json);
+void makeDecision();
+void sendCommandSafe(String command, String& lastCmd, unsigned long& lastTime);
 
 void setup() {
   // USB Serial Monitor baslat
@@ -152,6 +195,12 @@ void loop() {
     delay(5000);
   }
 
+  // Otomatik karar ağacı (belirli aralıklarla)
+  if (autoControlEnabled && (millis() - lastDecisionTime >= DECISION_INTERVAL)) {
+    makeDecision();
+    lastDecisionTime = millis();
+  }
+
   // USB Serial Monitor'den komut oku (test icin)
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
@@ -196,6 +245,9 @@ void loop() {
     
     // Son veriyi sakla (Web interface icin)
     lastSensorData = jsonBuffer;
+    
+    // JSON'u parse et ve sensör verilerini güncelle
+    parseSensorData(jsonBuffer);
 
     // SD'ye kaydet (NTP zaman damgası ile)
     File log = SD.open("/sensor_log.txt", FILE_WRITE);
@@ -266,6 +318,13 @@ void handleRoot() {
   html += "<small id='updateTime'>" + getFormattedTime() + "</small><br>";
   html += "<pre style='overflow-x:auto'>" + lastSensorData + "</pre>";
   html += "</div>";
+  html += "<div style='text-align:center;margin:10px 0'>";
+  html += "<button style='padding:10px 20px;font-size:14px;background:";
+  html += autoControlEnabled ? "#4CAF50" : "#f44336";
+  html += ";color:white;border:none;border-radius:5px;cursor:pointer' onclick='toggleAuto()'>";
+  html += autoControlEnabled ? "🤖 Otomatik Kontrol: AÇIK" : "🔴 Otomatik Kontrol: KAPALI";
+  html += "</button>";
+  html += "</div>";
   html += "<div class='controls'>";
   html += "<button class='btn-on' onclick=\"cmd('havaac')\">🌬️ Hava Aç</button>";
   html += "<button class='btn-off' onclick=\"cmd('havakapa')\">🔒 Hava Kapat</button>";
@@ -282,6 +341,7 @@ void handleRoot() {
   html += "</div>";
   html += "<script>";
   html += "function cmd(c){fetch('/command?cmd='+c).then(r=>r.text()).then(d=>{alert(d);updateStatus()})}";
+  html += "function toggleAuto(){fetch('/command?cmd=toggleauto').then(r=>r.text()).then(d=>{alert(d);location.reload()})}";
   html += "function updateStatus(){fetch('/status').then(r=>r.json()).then(d=>{";
   html += "document.getElementById('sensorData').innerHTML='<strong>Son Sensor Verisi:</strong><br><small>'+new Date().toLocaleString('tr-TR')+'</small><br><pre style=\"overflow-x:auto\">'+d.lastData+'</pre>';";
   html += "})}";
@@ -299,7 +359,16 @@ void handleCommand() {
     String cmd = server.arg("cmd");
     cmd.toLowerCase();
     
-    // Komut listesi kontrolu
+    // Otomatik kontrol aç/kapa
+    if (cmd == "toggleauto") {
+      autoControlEnabled = !autoControlEnabled;
+      String msg = autoControlEnabled ? "Otomatik kontrol AÇILDI" : "Otomatik kontrol KAPATILDI";
+      Serial.println("[WEB] " + msg);
+      server.send(200, "text/plain", msg);
+      return;
+    }
+    
+    // Manuel komut listesi kontrolu
     if (cmd == "havaac" || cmd == "havakapa" || cmd == "isikac" || 
         cmd == "isikkapa" || cmd == "sulaac" || cmd == "sulakapa") {
       
@@ -347,4 +416,363 @@ String getFormattedTime() {
   strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
   
   return String(buffer);
+}
+
+// ========================================
+// JSON PARSING FONKSIYONLARI
+// ========================================
+float parseJsonFloat(String json, String key) {
+  int keyIndex = json.indexOf("\"" + key + "\":");
+  if (keyIndex == -1) return 0.0;
+  
+  int valueStart = keyIndex + key.length() + 3;
+  int valueEnd = json.indexOf(',', valueStart);
+  if (valueEnd == -1) valueEnd = json.indexOf('}', valueStart);
+  
+  String value = json.substring(valueStart, valueEnd);
+  return value.toFloat();
+}
+
+int parseJsonInt(String json, String key) {
+  int keyIndex = json.indexOf("\"" + key + "\":");
+  if (keyIndex == -1) return 0;
+  
+  int valueStart = keyIndex + key.length() + 3;
+  int valueEnd = json.indexOf(',', valueStart);
+  if (valueEnd == -1) valueEnd = json.indexOf('}', valueStart);
+  
+  String value = json.substring(valueStart, valueEnd);
+  return value.toInt();
+}
+
+bool parseJsonBool(String json, String key) {
+  int keyIndex = json.indexOf("\"" + key + "\":");
+  if (keyIndex == -1) return false;
+  
+  int valueStart = keyIndex + key.length() + 3;
+  String substr = json.substring(valueStart, valueStart + 4);
+  
+  return (substr.indexOf("true") >= 0);
+}
+
+// ========================================
+// SENSOR VERİLERİNİ PARSE ET
+// ========================================
+void parseSensorData(String json) {
+  currentSensors.temperature = parseJsonFloat(json, "temp");
+  currentSensors.humidity = parseJsonFloat(json, "hum");
+  currentSensors.pressure = parseJsonFloat(json, "pres");
+  currentSensors.lux = parseJsonFloat(json, "lux");
+  currentSensors.co2 = parseJsonInt(json, "co2");
+  currentSensors.soilMoisture = parseJsonFloat(json, "soil");
+  currentSensors.dewPoint = parseJsonFloat(json, "dew");
+  currentSensors.heatIndex = parseJsonFloat(json, "heat");
+  currentSensors.roofOpen = parseJsonBool(json, "roof");
+  currentSensors.fanOn = parseJsonBool(json, "fan");
+  currentSensors.lightOn = parseJsonBool(json, "light");
+  currentSensors.pumpOn = parseJsonBool(json, "pump");
+  currentSensors.timestamp = millis();
+  
+  Serial.println("\n[SENSOR DATA PARSED]");
+  Serial.print("Temp: "); Serial.print(currentSensors.temperature); Serial.println(" °C");
+  Serial.print("Hum: "); Serial.print(currentSensors.humidity); Serial.println(" %");
+  Serial.print("CO2: "); Serial.print(currentSensors.co2); Serial.println(" ppm");
+  Serial.print("Soil: "); Serial.print(currentSensors.soilMoisture); Serial.println(" %");
+  Serial.print("Lux: "); Serial.println(currentSensors.lux);
+}
+
+// ========================================
+// GÜVENLİ KOMUT GÖNDERME (Tekrar Önleme)
+// ========================================
+void sendCommandSafe(String command, String& lastCmd, unsigned long& lastTime) {
+  unsigned long now = millis();
+  
+  // Aynı komut çok yakın zamanda gönderildiyse atla
+  if (command == lastCmd && (now - lastTime) < COMMAND_COOLDOWN) {
+    Serial.print("[SKIP] Komut yakın zamanda gönderildi: ");
+    Serial.println(command);
+    return;
+  }
+  
+  // Komutu gönder
+  sendCommandToArduino(command);
+  lastCmd = command;
+  lastTime = now;
+  
+  Serial.print("[AUTO] Komut gönderildi: ");
+  Serial.println(command);
+}
+
+// ========================================
+// AKILLI KARAR AĞACI - SERA KONTROL SİSTEMİ
+// ========================================
+void makeDecision() {
+  Serial.println("\n========================================");
+  Serial.println("KARAR AĞACI ÇALIŞIYOR...");
+  Serial.println("========================================");
+  
+  float temp = currentSensors.temperature;
+  float hum = currentSensors.humidity;
+  float pres = currentSensors.pressure;
+  int co2 = currentSensors.co2;
+  float soil = currentSensors.soilMoisture;
+  float lux = currentSensors.lux;
+  float dewPoint = currentSensors.dewPoint;
+  
+  // Geçersiz veri kontrolü
+  if (temp == 0 && hum == 0) {
+    Serial.println("[UYARI] Sensör verileri henüz alınmadı, karar atlanıyor...");
+    return;
+  }
+  
+  // ============================================
+  // KRİTİK ÖNCELIK 1: DONMA RİSKİ
+  // ============================================
+  if (temp < 10.0 || dewPoint < 5.0) {
+    Serial.println(">>> KOD-7: DONMA RİSKİ! <<<");
+    Serial.print("Sıcaklık: "); Serial.print(temp); Serial.println(" °C");
+    Serial.print("Çiy Noktası: "); Serial.print(dewPoint); Serial.println(" °C");
+    
+    if (currentSensors.roofOpen || currentSensors.fanOn) {
+      sendCommandSafe("havakapa", lastRoofCommand, lastRoofCommandTime);
+    }
+    if (currentSensors.pumpOn) {
+      sendCommandSafe("sulakapa", lastWaterCommand, lastWaterCommandTime);
+    }
+    return; // Acil durum, diğer kontrollere gerek yok
+  }
+  
+  // ============================================
+  // KRİTİK ÖNCELIK 2: FIRTINA RİSKİ (Düşük Basınç)
+  // ============================================
+  if (pres < 985.0 && pres > 0) {
+    Serial.println(">>> KOD-8: DÜŞÜK BASINÇ! Fırtına koruması <<<");
+    Serial.print("Basınç: "); Serial.print(pres); Serial.println(" hPa");
+    
+    if (currentSensors.roofOpen || currentSensors.fanOn) {
+      sendCommandSafe("havakapa", lastRoofCommand, lastRoofCommandTime);
+    }
+    if (currentSensors.pumpOn) {
+      sendCommandSafe("sulakapa", lastWaterCommand, lastWaterCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // YÜKSEK ÖNCELİK: AŞIRI SICAK + NEM
+  // ============================================
+  if (temp > 32.0 && hum > 70.0) {
+    Serial.println(">>> KOD-1: AŞIRI SICAK+NEM! <<<");
+    Serial.print("Sıcaklık: "); Serial.print(temp); Serial.println(" °C");
+    Serial.print("Nem: "); Serial.print(hum); Serial.println(" %");
+    
+    if (!currentSensors.roofOpen || !currentSensors.fanOn) {
+      sendCommandSafe("havaac", lastRoofCommand, lastRoofCommandTime);
+    }
+    if (currentSensors.pumpOn) {
+      sendCommandSafe("sulakapa", lastWaterCommand, lastWaterCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // YÜKSEK SICAKLIK + YÜKSEK CO2
+  // ============================================
+  if (temp > 28.0 && co2 > 800 && co2 < 5000) {
+    Serial.println(">>> KOD-2: YÜKSEK SICAK+CO2 <<<");
+    Serial.print("Sıcaklık: "); Serial.print(temp); Serial.println(" °C");
+    Serial.print("CO2: "); Serial.print(co2); Serial.println(" ppm");
+    
+    if (!currentSensors.roofOpen || !currentSensors.fanOn) {
+      sendCommandSafe("havaac", lastRoofCommand, lastRoofCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // YÜKSEK CO2 - Hava Değişimi Gerekli
+  // ============================================
+  if (co2 > 1500 && co2 < 5000 && temp > 20.0) {
+    Serial.println(">>> KOD-3: YÜKSEK CO2 - Hava değişimi <<<");
+    Serial.print("CO2: "); Serial.print(co2); Serial.println(" ppm");
+    
+    if (!currentSensors.roofOpen || !currentSensors.fanOn) {
+      sendCommandSafe("havaac", lastRoofCommand, lastRoofCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // YÜKSEK NEM - Küf Riski
+  // ============================================
+  if (hum > 85.0 && temp < 25.0 && (temp - dewPoint) < 3.0) {
+    Serial.println(">>> KOD-4: YÜKSEK NEM - Küf riski <<<");
+    Serial.print("Nem: "); Serial.print(hum); Serial.println(" %");
+    Serial.print("Temp-DewPoint: "); Serial.print(temp - dewPoint); Serial.println(" °C");
+    
+    if (!currentSensors.roofOpen || !currentSensors.fanOn) {
+      sendCommandSafe("havaac", lastRoofCommand, lastRoofCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // GECE MODU - Soğuk Koruma
+  // ============================================
+  if (lux < 50.0 && temp < 18.0) {
+    Serial.println(">>> KOD-6: GECE MODU - Soğuk koruma <<<");
+    Serial.print("Işık: "); Serial.print(lux); Serial.println(" lux");
+    Serial.print("Sıcaklık: "); Serial.print(temp); Serial.println(" °C");
+    
+    if (currentSensors.roofOpen || currentSensors.fanOn) {
+      sendCommandSafe("havakapa", lastRoofCommand, lastRoofCommandTime);
+    }
+    if (!currentSensors.lightOn) {
+      sendCommandSafe("isikac", lastLightCommand, lastLightCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // GÜNDÜZ HAVALANDIRMASı - Normal Hava Akışı
+  // ============================================
+  if (lux > 10000.0 && temp > 22.0 && temp < 28.0 && co2 < 1000 && co2 > 0) {
+    Serial.println(">>> KOD-5: GÜNDÜZ HAVALANDIRMASı <<<");
+    Serial.print("Işık: "); Serial.print(lux); Serial.println(" lux");
+    
+    if (!currentSensors.roofOpen || !currentSensors.fanOn) {
+      sendCommandSafe("havaac", lastRoofCommand, lastRoofCommandTime);
+    }
+    if (currentSensors.lightOn && lux > 20000.0) {
+      sendCommandSafe("isikkapa", lastLightCommand, lastLightCommandTime);
+    }
+  }
+  
+  // ============================================
+  // SULAMA KONTROL - ACİL SULAMA
+  // ============================================
+  if (soil < 20.0 && soil > 0 && temp > 28.0) {
+    Serial.println(">>> SULAMA-1: ACİL SULAMA! <<<");
+    Serial.print("Toprak Nem: "); Serial.print(soil); Serial.println(" %");
+    Serial.print("Sıcaklık: "); Serial.print(temp); Serial.println(" °C");
+    
+    if (!currentSensors.pumpOn) {
+      sendCommandSafe("sulaac", lastWaterCommand, lastWaterCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // SULAMA KONTROL - NORMAL SULAMA
+  // ============================================
+  if (soil < 40.0 && soil > 0 && temp > 20.0 && lux > 1000.0) {
+    Serial.println(">>> SULAMA-2: NORMAL SULAMA <<<");
+    Serial.print("Toprak Nem: "); Serial.print(soil); Serial.println(" %");
+    
+    if (!currentSensors.pumpOn) {
+      sendCommandSafe("sulaac", lastWaterCommand, lastWaterCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // SULAMA KONTROL - AKŞAM SULAMASI (Optimal)
+  // ============================================
+  if (soil < 50.0 && soil > 0 && lux < 1000.0 && temp > 15.0) {
+    Serial.println(">>> SULAMA-3: AKŞAM SULAMASI (Optimal) <<<");
+    Serial.print("Toprak Nem: "); Serial.print(soil); Serial.println(" %");
+    
+    if (!currentSensors.pumpOn) {
+      sendCommandSafe("sulaac", lastWaterCommand, lastWaterCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // AŞIRI SULAMA KORUMASIM
+  // ============================================
+  if (soil > 90.0 && currentSensors.pumpOn) {
+    Serial.println(">>> SULAMA-5: AŞIRI SULAMA KORUMASI! <<<");
+    Serial.print("Toprak Nem: "); Serial.print(soil); Serial.println(" %");
+    
+    sendCommandSafe("sulakapa", lastWaterCommand, lastWaterCommandTime);
+    
+    // Kurutma için havalandır
+    if (!currentSensors.roofOpen || !currentSensors.fanOn) {
+      sendCommandSafe("havaac", lastRoofCommand, lastRoofCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // YAĞMUR İPTALI
+  // ============================================
+  if (pres < 990.0 && pres > 0 && hum > 85.0 && currentSensors.pumpOn) {
+    Serial.println(">>> SULAMA-4: YAĞMUR İPTALİ <<<");
+    Serial.print("Basınç: "); Serial.print(pres); Serial.println(" hPa");
+    Serial.print("Nem: "); Serial.print(hum); Serial.println(" %");
+    
+    sendCommandSafe("sulakapa", lastWaterCommand, lastWaterCommandTime);
+    return;
+  }
+  
+  // ============================================
+  // KÜF RİSKİ - Sulama Durdur
+  // ============================================
+  if (soil > 80.0 && hum > 85.0 && temp < 22.0 && currentSensors.pumpOn) {
+    Serial.println(">>> SULAMA-6: KÜF RİSKİ - Sulama durdur <<<");
+    
+    sendCommandSafe("sulakapa", lastWaterCommand, lastWaterCommandTime);
+    
+    // Havalandırma
+    if (!currentSensors.roofOpen || !currentSensors.fanOn) {
+      sendCommandSafe("havaac", lastRoofCommand, lastRoofCommandTime);
+    }
+    return;
+  }
+  
+  // ============================================
+  // İDEAL DURUM - Enerji Tasarrufu
+  // ============================================
+  if (temp >= 20.0 && temp <= 26.0 && 
+      hum >= 50.0 && hum <= 70.0 && 
+      co2 >= 400 && co2 <= 1000 &&
+      soil >= 50.0 && soil <= 70.0) {
+    
+    Serial.println(">>> KOD-9: OPTIMAL KOŞULLAR - Sistem stabil <<<");
+    Serial.print("Temp: "); Serial.print(temp); Serial.println(" °C");
+    Serial.print("Nem: "); Serial.print(hum); Serial.println(" %");
+    Serial.print("CO2: "); Serial.print(co2); Serial.println(" ppm");
+    Serial.print("Toprak: "); Serial.print(soil); Serial.println(" %");
+    
+    // Enerji tasarrufu için gereksiz sistemleri kapat
+    if (currentSensors.roofOpen || currentSensors.fanOn) {
+      if (co2 < 600 && temp < 24.0) {
+        sendCommandSafe("havakapa", lastRoofCommand, lastRoofCommandTime);
+      }
+    }
+    
+    if (currentSensors.pumpOn) {
+      sendCommandSafe("sulakapa", lastWaterCommand, lastWaterCommandTime);
+    }
+    
+    // Gündüz ise ışığı kapat
+    if (currentSensors.lightOn && lux > 10000.0) {
+      sendCommandSafe("isikkapa", lastLightCommand, lastLightCommandTime);
+    }
+    
+    Serial.println("Sistem enerji tasarrufu modunda.");
+  }
+  
+  // ============================================
+  // GECE AYDINLATMA KONTROLÜ
+  // ============================================
+  if (lux < 50.0 && !currentSensors.lightOn && temp > 10.0) {
+    Serial.println(">>> GECE AYDINLATMA <<<");
+    Serial.print("Işık: "); Serial.print(lux); Serial.println(" lux");
+    
+    sendCommandSafe("isikac", lastLightCommand, lastLightCommandTime);
+  }
+  
+  Serial.println("========================================\n");
 }

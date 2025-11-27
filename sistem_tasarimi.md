@@ -1,1152 +1,1554 @@
-# Akıllı Sera Sistemi - Sistem Tasarımı
+﻿# AkÄ±llÄ± Sera Sistemi - Sistem TasarÄ±mÄ±
 
-## 📋 Proje Özeti
+## ğŸ“‹ Proje Ã–zeti
 
-Çoklu sensör entegrasyonu ile otomatik/manuel sera kontrol sistemi. Sıcaklık, nem, CO2, ışık ve toprak nemi verilerini kullanarak sera kapağı, havalandırma, aydınlatma ve sulama sistemini akıllı bir şekilde kontrol eder.
+**Ä°ki katmanlÄ± akÄ±llÄ± sera kontrol sistemi:**
+1. **Arduino Mega (Veri Toplama):** SensÃ¶rlerden veri okur, UART Ã¼zerinden NodeMCU'ya JSON gÃ¶nderir
+2. **NodeMCU ESP8266 (Karar & Kontrol):** JSON verilerini parse eder, akÄ±llÄ± karar aÄŸacÄ± ile Arduino'ya komut gÃ¶nderir
 
-**Özellikler:**
-- ✅ Otomatik mod: Sensör verilerine göre akıllı kontrol
-- ✅ Manuel mod: Serial komutlarla anlık kontrol
-- ✅ LoRa kablosuz veri iletimi (3 km menzil)
-- ✅ 4 kontrol sistemi (Kapak+Fan, Sulama, Aydınlatma)
-
----
-
-## 🎮 Kontrol Modları
-
-### 1. OTOMATIK MOD (Varsayılan)
-Sistem sensör verilerine göre 9 sera kodu ve 8 sulama kodu ile otomatik kararlar verir.
-
-### 2. MANUEL MOD
-Serial port üzerinden komutlarla anlık kontrol:
-
-**Serial Komutlar (115200 baud):**
-```
-havaac    → Sera kapağını aç (0°) + Fan açık
-havakapa  → Sera kapağını kapat (95°) + Fan kapalı
-isikac    → Aydınlatmayı aç (D29)
-isikkapa  → Aydınlatmayı kapat (D29)
-sulaac    → Sulamayı aç (D31)
-sulakapa  → Sulamayı kapat (D31)
-```
-
-**⚠️ Sulama Güvenlik Özelliği:**
-- `sulaac` komutu verildiğinde sistem otomatik olarak:
-  1. Mevcut tüm sistem durumlarını kaydeder
-  2. Sera kapağını kapatır (95°)
-  3. Fan'ı kapatır
-  4. Işığı kapatır
-  5. Sulamayı başlatır
-  
-- `sulakapa` komutu verildiğinde:
-  1. Sulama durdurulur
-  2. Tüm sistemler önceki kayıtlı durumuna otomatik geri döner
-
-**Kullanım:** Serial Monitor'da komutu yazıp Enter'a basın.
+**Sistem Mimarisi:**
+- âœ… Arduino Mega: SensÃ¶r okuma + Kalman filtreleme + Pasif veri gÃ¶nderimi
+- âœ… NodeMCU: JSON parsing + Karar aÄŸacÄ± + Otomatik/Manuel komut gÃ¶nderimi
+- âœ… Web Kontrol Paneli (NodeMCU Ã¼zerinde)
+- âœ… LoRa kablosuz veri iletimi (3 km menzil)
+- âœ… Firebase & SD Kart veri kayÄ±t
 
 ---
 
-## 🔧 Donanım Bileşenleri
+## ğŸ® Kontrol ModlarÄ±
+
+### MOD 1: OTOMATIK KONTROL (NodeMCU Karar AÄŸacÄ±)
+NodeMCU, Arduino'dan aldÄ±ÄŸÄ± JSON sensÃ¶r verilerini 10 saniyede bir analiz eder ve akÄ±llÄ± kararlar verir.
+
+**Karar AÄŸacÄ± Ã–zellikleri:**
+- 9 Sera Kontrol Kodu (KOD-1 â†’ KOD-9)
+- 8 Sulama Kontrol Kodu (SULAMA-1 â†’ SULAMA-8)
+- Ã–ncelik tabanlÄ± karar mekanizmasÄ±
+- Tekrar Ã¶nleme sistemi (30 saniye cooldown)
+- Web arayÃ¼zÃ¼nden aÃ§/kapa
+
+### MOD 2: MANUEL KONTROL (Web veya Serial)
+NodeMCU web paneli veya Serial Monitor Ã¼zerinden manuel komutlar gÃ¶nderilebilir.
+
+**Manuel Komutlar:**
+```
+havaac    â†’ Sera kapaÄŸÄ±nÄ± aÃ§ (0Â°) + Fan aÃ§Ä±k
+havakapa  â†’ Sera kapaÄŸÄ±nÄ± kapat (95Â°) + Fan kapalÄ±
+isikac    â†’ AydÄ±nlatmayÄ± aÃ§
+isikkapa  â†’ AydÄ±nlatmayÄ± kapat
+sulaac    â†’ SulamayÄ± aÃ§
+sulakapa  â†’ SulamayÄ± kapat
+```
+
+**Web Kontrol Paneli:**
+- URL: `http://<NodeMCU-IP>/`
+- GerÃ§ek zamanlÄ± sensÃ¶r verileri
+- Tek tÄ±kla komut gÃ¶nderme
+- Otomatik kontrol aÃ§/kapa butonu
+
+---
+
+## ğŸ”§ DonanÄ±m BileÅŸenleri
 
 ### 1. Mikrocontroller
-- **Arduino Mega 2560**
+
+#### Arduino Mega 2560 (SensÃ¶r Sistemi)
+- **Rol:** SensÃ¶r okuma, Kalman filtreleme, JSON veri gÃ¶nderimi
+- **Ã–zellikler:**
   - 54 dijital I/O pin
-  - 16 analog giriş
-  - 4 donanımsal UART
-  - I2C desteği
+  - 16 analog giriÅŸ
+  - 4 donanÄ±msal UART
+  - I2C desteÄŸi
   - 256KB Flash bellek
+- **Ä°letiÅŸim:**
+  - UART0 (USB): 115200 baud - Debug ve manuel komutlar
+  - UART2 (D16/TX2, D17/RX2): 9600 baud - NodeMCU ile JSON iletiÅŸimi
+  - UART1 (D18/TX1, D19/RX1): 9600 baud - MH-Z14A CO2 sensÃ¶rÃ¼
+  
+#### NodeMCU ESP8266 (Kontrol Sistemi)
+- **Rol:** JSON parsing, karar aÄŸacÄ±, Arduino'ya komut gÃ¶nderme, web server
+- **Ã–zellikler:**
+  - WiFi 802.11 b/g/n
+  - 80MHz CPU (160MHz boost)
+  - 4MB Flash
+  - 80KB RAM
+- **Ä°letiÅŸim:**
+  - SoftwareSerial (D1/RX=GPIO5, D2/TX=GPIO4): 9600 baud - Arduino ile Ã§ift yÃ¶nlÃ¼
+  - WiFi: Web server (Port 80)
+  - NTP: Zaman senkronizasyonu
+  - SD Kart: CS=D8 (GPIO15) - Veri kayÄ±t
 
-### 2. Sensörler
+### 2. SensÃ¶rler
 
-#### a) BH1750 (GY-30) - Işık Sensörü
-- **İletişim:** I2C
+#### a) BH1750 (GY-30) - IÅŸÄ±k SensÃ¶rÃ¼
+- **Ä°letiÅŸim:** I2C
 - **Adres:** 0x23 veya 0x5C
-- **Ölçüm Aralığı:** 1-65535 lux
-- **Çözünürlük:** 1 lux
+- **Ã–lÃ§Ã¼m AralÄ±ÄŸÄ±:** 1-65535 lux
+- **Ã‡Ã¶zÃ¼nÃ¼rlÃ¼k:** 1 lux
 - **Pinler:**
-  - SDA → D20
-  - SCL → D21
-  - VCC → 5V
-  - GND → GND
+  - SDA â†’ D20
+  - SCL â†’ D21
+  - VCC â†’ 5V
+  - GND â†’ GND
 
-#### b) BME680 - Çevre Sensörü
-- **İletişim:** I2C
+#### b) BME680 - Ã‡evre SensÃ¶rÃ¼
+- **Ä°letiÅŸim:** I2C
 - **Adres:** 0x76 veya 0x77
-- **Ölçümler:**
-  - Sıcaklık: -40°C ~ +85°C (±1°C)
-  - Nem: 0% ~ 100% (±3%)
-  - Basınç: 300 ~ 1100 hPa (±1 hPa)
+- **Ã–lÃ§Ã¼mler:**
+  - SÄ±caklÄ±k: -40Â°C ~ +85Â°C (Â±1Â°C)
+  - Nem: 0% ~ 100% (Â±3%)
+  - BasÄ±nÃ§: 300 ~ 1100 hPa (Â±1 hPa)
   - Gaz Direnci: 0 ~ 500 KOhm
 - **Pinler:**
-  - SDA → D20
-  - SCL → D21
-  - VCC → 3.3V veya 5V
-  - GND → GND
+  - SDA â†’ D20
+  - SCL â†’ D21
+  - VCC â†’ 3.3V veya 5V
+  - GND â†’ GND
 
-#### c) MH-Z14A - CO2 Sensörü
-- **İletişim:** UART (9600 baud)
-- **Ölçüm Aralığı:** 0-5000 ppm
-- **Doğruluk:** ±50 ppm + 5%
-- **Isınma Süresi:** 3 dakika
+#### c) MH-Z14A - CO2 SensÃ¶rÃ¼
+- **Ä°letiÅŸim:** UART (9600 baud)
+- **Ã–lÃ§Ã¼m AralÄ±ÄŸÄ±:** 0-5000 ppm
+- **DoÄŸruluk:** Â±50 ppm + 5%
+- **IsÄ±nma SÃ¼resi:** 3 dakika
 - **Pinler:**
-  - TX → D19 (RX1)
-  - RX → D18 (TX1)
-  - VCC → 5V (150mA)
-  - GND → GND
+  - TX â†’ D19 (RX1)
+  - RX â†’ D18 (TX1)
+  - VCC â†’ 5V (150mA)
+  - GND â†’ GND
 
-#### d) MH Water Sensor - Toprak Nem Sensörü
-- **İletişim:** Analog
-- **Çıkış:** 0-1023 (ADC)
-- **Ölçüm:** Kapasitif toprak nemi
+#### d) MH Water Sensor - Toprak Nem SensÃ¶rÃ¼
+- **Ä°letiÅŸim:** Analog
+- **Ã‡Ä±kÄ±ÅŸ:** 0-1023 (ADC)
+- **Ã–lÃ§Ã¼m:** Kapasitif toprak nemi
 - **Pinler:**
-  - A0 → A0 (Analog)
-  - VCC → 5V
-  - GND → GND
+  - A0 â†’ A0 (Analog)
+  - VCC â†’ 5V
+  - GND â†’ GND
 - **Kalibrasyon:**
   - Kuru (Hava): 1023
   - Islak (Su): 300
 
-### 3. Kablosuz İletişim
+### 3. Kablosuz Ä°letiÅŸim
 
-#### LoRa E32 Modülü (Verici)
+#### LoRa E32 ModÃ¼lÃ¼ (Verici)
 - **Model:** E32-TTL-100
-- **İletişim:** UART (Software Serial)
+- **Ä°letiÅŸim:** UART (Software Serial)
 - **Frekans:** 433 MHz (veya 868/915 MHz)
-- **Menzil:** 3 km (açık alan)
-- **Güç:** 100 mW
+- **Menzil:** 3 km (aÃ§Ä±k alan)
+- **GÃ¼Ã§:** 100 mW
 - **Pinler (Verici):**
-  - RX → D10 (Software Serial)
-  - TX → D11 (Software Serial)
-  - M0 → D6
-  - M1 → D7
-  - VCC → 5V
-  - GND → GND
-- **Özellikler:**
+  - RX â†’ D10 (Software Serial)
+  - TX â†’ D11 (Software Serial)
+  - M0 â†’ D6
+  - M1 â†’ D7
+  - VCC â†’ 5V
+  - GND â†’ GND
+- **Ã–zellikler:**
   - Binary paket transferi
-  - CRC hata kontrolü
-  - Otomatik yeniden gönderim
-  - Düşük güç tüketimi
+  - CRC hata kontrolÃ¼
+  - Otomatik yeniden gÃ¶nderim
+  - DÃ¼ÅŸÃ¼k gÃ¼Ã§ tÃ¼ketimi
 
-#### LoRa E32 Modülü (Alıcı - Yer İstasyonu)
-- **Bağımsız Arduino sistemi**
-- **Aynı pin konfigürasyonu**
-- **Serial Monitor çıktısı (9600 baud)**
+#### LoRa E32 ModÃ¼lÃ¼ (AlÄ±cÄ± - Yer Ä°stasyonu)
+- **BaÄŸÄ±msÄ±z Arduino sistemi**
+- **AynÄ± pin konfigÃ¼rasyonu**
+- **Serial Monitor Ã§Ä±ktÄ±sÄ± (9600 baud)**
 
-### 4. Aktüatörler
+### 4. AktÃ¼atÃ¶rler
 
-#### a) Servo Motor (Sera Kapağı)
-- **Model:** MG995 (Metal dişlili, yüksek tork)
+#### a) Servo Motor (Sera KapaÄŸÄ±)
+- **Model:** MG995 (Metal diÅŸlili, yÃ¼ksek tork)
 - **Kontrol:** PWM
-- **Açı:** 0° (Tam Açık) ~ 95° (Tam Kapalı)
+- **AÃ§Ä±:** 0Â° (Tam AÃ§Ä±k) ~ 95Â° (Tam KapalÄ±)
 - **Pin:** D9
-- **Güç:** 4.8-7.2V, 2.5A (yük altında)
+- **GÃ¼Ã§:** 4.8-7.2V, 2.5A (yÃ¼k altÄ±nda)
 - **Tork:** 10 kg-cm
-- **Özellikler:**
-  - Metal dişliler (dayanıklı)
-  - Çift rulman (hassas)
-  - Su geçirmez koruma
+- **Ã–zellikler:**
+  - Metal diÅŸliler (dayanÄ±klÄ±)
+  - Ã‡ift rulman (hassas)
+  - Su geÃ§irmez koruma
   
-#### b) Havalandırma Fanı Rölesi
+#### b) HavalandÄ±rma FanÄ± RÃ¶lesi
 - **Pin:** D30
-- **Kontrol:** Dijital (LOW=Açık, HIGH=Kapalı)
-- **Özellikler:**
-  - Sera kapağı >30% açıkken otomatik aktif
-  - Manuel kontrol ile bağımsız çalıştırılabilir
+- **Kontrol:** Dijital (LOW=AÃ§Ä±k, HIGH=KapalÄ±)
+- **Ã–zellikler:**
+  - Sera kapaÄŸÄ± >30% aÃ§Ä±kken otomatik aktif
+  - Manuel kontrol ile baÄŸÄ±msÄ±z Ã§alÄ±ÅŸtÄ±rÄ±labilir
   
-#### c) Aydınlatma Rölesi
+#### c) AydÄ±nlatma RÃ¶lesi
 - **Pin:** D29 (Active LOW)
-- **Kontrol:** Dijital (LOW=Açık, HIGH=Kapalı)
-- **Kullanım:**
-  - Otomatik: Işık < 200 lux → Açık
+- **Kontrol:** Dijital (LOW=AÃ§Ä±k, HIGH=KapalÄ±)
+- **KullanÄ±m:**
+  - Otomatik: IÅŸÄ±k < 200 lux â†’ AÃ§Ä±k
   - Manuel: Komut isikac/isikkapa ile kontrol
-- **Not:** D7'den D29'a taşındı (LoRa M1 pin çakışması önlendi)
+- **Not:** D7'den D29'a taÅŸÄ±ndÄ± (LoRa M1 pin Ã§akÄ±ÅŸmasÄ± Ã¶nlendi)
   
-#### d) Sulama Pompası Rölesi
-- **Pin:** D31 (D10'dan taşındı - LoRa çakışması çözüldü)
-- **Kontrol:** Dijital (LOW=Açık, HIGH=Kapalı)
-- **Kullanım:**
-  - Otomatik: Toprak nemi < 40% → 20-30 saniye
+#### d) Sulama PompasÄ± RÃ¶lesi
+- **Pin:** D31 (D10'dan taÅŸÄ±ndÄ± - LoRa Ã§akÄ±ÅŸmasÄ± Ã§Ã¶zÃ¼ldÃ¼)
+- **Kontrol:** Dijital (LOW=AÃ§Ä±k, HIGH=KapalÄ±)
+- **KullanÄ±m:**
+  - Otomatik: Toprak nemi < 40% â†’ 20-30 saniye
   - Manuel: Komut 3/-3 ile kontrol
 
 ---
 
-## 🔌 Bağlantı Şeması
+## ğŸ”Œ BaÄŸlantÄ± ÅemasÄ±
 
 ```
-ARDUINO MEGA 2560 (VERİCİ SİSTEMİ)
-│
-├─ I2C Bus (D20/SDA, D21/SCL)
-│  ├─ BH1750 (0x23)
-│  └─ BME680 (0x76)
-│
-├─ UART1 (D18/TX1, D19/RX1)
-│  └─ MH-Z14A CO2 Sensor
-│
-├─ UART2 (D16/TX2, D17/RX2)
-│  └─ NodeMCU ESP8266 (9600 baud, JSON)
-│     - SoftwareSerial (NodeMCU D1=GPIO5)
-│     - Firebase Realtime Database
-│     - SD Kart veri kaydetme
-│
-├─ Software Serial (D10/RX, D11/TX)
-│  └─ LoRa E32 Modülü (Verici)
-│     - M0 → D6
-│     - M1 → D8 (LoRa kontrol pini)
-│
-├─ Analog Input
-│  └─ A0 → MH Water Sensor
-│
-├─ PWM Output
-│  └─ D9 → MG995 Servo Motor (Sera Kapağı)
-│
-└─ Digital Outputs (Aktuatörler)
-   ├─ D29 → Röle (Işık) - Active LOW
-   ├─ D30 → Röle (Fan) - Active LOW
-   └─ D31 → Röle (Sulama Pompası) - Active LOW
+ARDUINO MEGA 2560 (SENSÃ–R SÄ°STEMÄ° - SADECE VERÄ° TOPLA)
+â”‚
+â”œâ”€ I2C Bus (D20/SDA, D21/SCL)
+â”‚  â”œâ”€ BH1750 (0x23)
+â”‚  â””â”€ BME680 (0x76)
+â”‚
+â”œâ”€ UART0 (USB) - 115200 baud
+â”‚  â””â”€ Serial Monitor (Debug + Manuel komut alÄ±mÄ±)
+â”‚
+â”œâ”€ UART1 (D18/TX1, D19/RX1) - 9600 baud
+â”‚  â””â”€ MH-Z14A CO2 Sensor
+â”‚
+â”œâ”€ UART2 (D16/TX2, D17/RX2) - 9600 baud
+â”‚  â””â”€ NodeMCU ESP8266 (Ã‡Ä°FT YÃ–NLÃœ)
+â”‚     â”œâ”€ Arduino â†’ NodeMCU: JSON sensÃ¶r verileri (her 5 saniye)
+â”‚     â””â”€ NodeMCU â†’ Arduino: Komutlar (havaac, isikac, sulaac vb.)
+â”‚
+â”œâ”€ Software Serial (D10/RX, D11/TX)
+â”‚  â””â”€ LoRa E32 ModÃ¼lÃ¼ (Verici)
+â”‚     - M0 â†’ D6
+â”‚     - M1 â†’ D8 (LoRa kontrol pini)
+â”‚
+â”œâ”€ Analog Input
+â”‚  â””â”€ A0 â†’ MH Water Sensor
+â”‚
+â”œâ”€ PWM Output
+â”‚  â””â”€ D9 â†’ MG995 Servo Motor (Sera KapaÄŸÄ±)
+â”‚
+â””â”€ Digital Outputs (AktuatÃ¶rler - MANUEL KONTROL)
+   â”œâ”€ D29 â†’ RÃ¶le (IÅŸÄ±k) - Active LOW
+   â”œâ”€ D30 â†’ RÃ¶le (Fan) - Active LOW
+   â””â”€ D31 â†’ RÃ¶le (Sulama PompasÄ±) - Active LOW
 
-         ↓↓↓ LoRa 433MHz Kablosuz ↓↓↓
+         â†“â†“â†“ UART2 (9600 baud, Ã‡Ä°FT YÃ–NLÃœ) â†“â†“â†“
+
+NODEMCU ESP8266 (KARAR VE KONTROL SÄ°STEMÄ°)
+â”‚
+â”œâ”€ SoftwareSerial (D1=GPIO5/RX, D2=GPIO4/TX) - 9600 baud
+â”‚  â””â”€ Arduino Mega UART2 (Ã‡Ä°FT YÃ–NLÃœ)
+â”‚     â”œâ”€ RX: JSON sensÃ¶r verileri alÄ±r
+â”‚     â””â”€ TX: Kontrol komutlarÄ± gÃ¶nderir
+â”‚
+â”œâ”€ WiFi (802.11 b/g/n)
+â”‚  â”œâ”€ NTP Sunucu (Zaman senkronizasyonu)
+â”‚  â””â”€ Web Server (Port 80)
+â”‚     â”œâ”€ Ana Sayfa: Kontrol paneli
+â”‚     â”œâ”€ /command: Komut gÃ¶nder
+â”‚     â””â”€ /status: Durum sorgula
+â”‚
+â””â”€ SPI (SD Kart) - CS=D8 (GPIO15)
+   â””â”€ SD Kart ModÃ¼lÃ¼
+      - sensor_log.txt (JSON + Zaman damgasÄ±)
+
+         â†“â†“â†“ LoRa 433MHz Kablosuz â†“â†“â†“
          
-ARDUINO (ALICI - YER İSTASYONU)
-│
-└─ Software Serial (D10/RX, D11/TX)
-   └─ LoRa E32 Modülü (Alıcı)
-      - M0 → D6
-      - M1 → D8
-      - Serial Monitor → USB (9600 baud)
-
-         ↓↓↓ WiFi / İnternet ↓↓↓
-
-FIREBASE & SD KART SİSTEMİ
-│
-└─ NodeMCU ESP8266
-   ├─ Firebase Realtime Database (Bulut)
-   └─ SD Kart Modülü (Yerel)
+ARDUINO (ALICI - YER Ä°STASYONU)
+â”‚
+â””â”€ Software Serial (D10/RX, D11/TX)
+   â””â”€ LoRa E32 ModÃ¼lÃ¼ (AlÄ±cÄ±)
+      - M0 â†’ D6
+      - M1 â†’ D8
+      - Serial Monitor â†’ USB (9600 baud)
 ```
 
 ---
 
-## 📊 Veri Akışı
+## ğŸ“Š Veri AkÄ±ÅŸÄ± ve Sistem Mimarisi
 
 ```
-┌─────────────────┐
-│   SENSÖRLER     │
-│  (VERİCİ SİSTEM)│
-│ • BH1750        │──┐
-│ • BME680        │──┤
-│ • MH-Z14A       │──┼──> Arduino Mega 2560
-│ • Soil Sensor   │──┘
-└─────────────────┘
-                      │
-                      ├──> Veri Okuma
-                      │
-                      ├──> Bilimsel Hesaplamalar
-                      │    • Çiy Noktası
-                      │    • Heat Index
-                      │    • Mutlak Nem
-                      │    • CO2 Konsantrasyonu
-                      │
-                      ├──> Karar Algoritması
-                      │    • 9 Sera Kapak Kodu
-                      │    • 8 Sulama Kodu
-                      │
-                      ├──> Kontrol Sinyalleri
-                      │    ├──> Servo Motor (Sera Kapağı)
-                      │    ├──> Röle (Fan)
-                      │    ├──> Röle (Işık)
-                      │    └──> Röle (Sulama)
-                      │
-                      └──> LoRa Veri Paketi (72 byte)
-                           │
-                           ├─ BME680: Sıcaklık, Nem, Basınç, Gaz
-                           ├─ BH1750: Işık (lux)
-                           ├─ MH-Z14A: CO2, Sensör Sıcaklık
-                           ├─ Soil: Nem %, Ham değer
-                           ├─ Kontrol: Kapak %, Pompa, Süre
-                           ├─ Hesaplanan: Çiy, Heat Index, Abs. Nem
-                           ├─ Sistem: Uptime, Sensör durumu
-                           └─ CRC: Veri doğrulama
-                           
-                           ↓↓↓ 433 MHz Kablosuz ↓↓↓
-                           
-┌─────────────────────────────────────────┐
-│   YER İSTASYONU (ALICI SİSTEM)         │
-│                                         │
-│ Arduino + LoRa E32 Alıcı               │
-│   ↓                                     │
-│ CRC Doğrulama                          │
-│   ↓                                     │
-│ Veri Çözümleme                         │
-│   ↓                                     │
-│ Serial Monitor (9600 baud)             │
-│   • Sistem Bilgileri                   │
-│   • Tüm Sensör Verileri                │
-│   • Hesaplanan Değerler                │
-│   • Kontrol Durumları                  │
-│   • Sera Sağlık Skoru (0-100)          │
-│   • Akıllı Uyarılar                    │
-│   • İletişim İstatistikleri            │
-└─────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                  ARDUINO MEGA 2560 (VERÄ°CÄ°)                   â”‚
+â”‚                   SADECE VERÄ° TOPLAMA                         â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                             â”‚
+    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+    â”‚                        â”‚                        â”‚
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”          â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”          â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚SENSÃ–RLERâ”‚          â”‚   KALMAN     â”‚          â”‚  MANUEL  â”‚
+â”‚         â”‚â”€â”€READâ”€â”€> â”‚  FÄ°LTRESÄ°    â”‚â”€â”€â”€â”€â”€â”€>   â”‚  KOMUT   â”‚
+â”‚ BH1750  â”‚          â”‚              â”‚          â”‚  Ä°ÅLEME  â”‚
+â”‚ BME680  â”‚          â”‚ 7 FÄ°LTRE     â”‚          â”‚(USB/UART)â”‚
+â”‚ MH-Z14A â”‚          â”‚ PARALEL      â”‚          â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+â”‚ SOIL    â”‚          â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                 â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                   â”‚                       â”‚
+                              â”‚                       â”‚
+                        â”Œâ”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”
+                        â”‚    JSON FORMATTER               â”‚
+                        â”‚ - SÄ±caklÄ±k (FILTERED)           â”‚
+                        â”‚ - Nem (FILTERED)                â”‚
+                        â”‚ - CO2 (FILTERED)                â”‚
+                        â”‚ - Toprak (FILTERED)             â”‚
+                        â”‚ - IÅŸÄ±k (FILTERED)               â”‚
+                        â”‚ - Ã‡iy NoktasÄ±                   â”‚
+                        â”‚ - Heat Index                    â”‚
+                        â”‚ - Sistem DurumlarÄ±              â”‚
+                        â””â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                              â”‚
+                â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                â”‚                            â”‚
+          â”Œâ”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”            â”Œâ”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”
+          â”‚ UART2 TX2  â”‚            â”‚  LoRa E32 TX   â”‚
+          â”‚ 9600 baud  â”‚            â”‚   433 MHz      â”‚
+          â”‚   JSON     â”‚            â”‚  Binary Packet â”‚
+          â””â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜            â””â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â”‚                            â”‚
+                â”‚                            â”‚
+                â”‚                      â”Œâ”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”
+                â”‚                      â”‚ YER        â”‚
+                â”‚                      â”‚ Ä°STASYONU  â”‚
+                â”‚                      â”‚ (ALICI)    â”‚
+                â”‚                      â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â”‚
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚            NODEMCU ESP8266 (KARAR SÄ°STEMÄ°)                    â”‚
+â”‚              AKÄ±LLÄ± KONTROL MERKEZÄ°                           â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                             â”‚
+                    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                    â”‚                   â”‚
+            â”Œâ”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”   â”Œâ”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”
+            â”‚  JSON PARSING  â”‚   â”‚ WEB SERVER â”‚
+            â”‚  - SensÃ¶r ver. â”‚   â”‚  Port 80   â”‚
+            â”‚  - String iÅŸl. â”‚   â”‚ Kontrol UI â”‚
+            â””â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                    â”‚
+            â”Œâ”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+            â”‚    KARAR AÄACI ALGORÄ°TMASI      â”‚
+            â”‚                                 â”‚
+            â”‚  Her 10 saniyede bir:          â”‚
+            â”‚  1. JSON'u parse et            â”‚
+            â”‚  2. SensÃ¶r verilerini analiz   â”‚
+            â”‚  3. Ã–ncelik tabanlÄ± kararlar   â”‚
+            â”‚  4. Komut cooldown kontrolÃ¼    â”‚
+            â”‚  5. Arduino'ya komut gÃ¶nder    â”‚
+            â”‚                                 â”‚
+            â”‚  KRÄ°TÄ°K Ã–NCELÄ°K:               â”‚
+            â”‚  â”œâ”€ KOD-7: Donma Riski         â”‚
+            â”‚  â””â”€ KOD-8: FÄ±rtÄ±na Riski       â”‚
+            â”‚                                 â”‚
+            â”‚  YÃœKSEK Ã–NCELÄ°K:               â”‚
+            â”‚  â”œâ”€ KOD-1: AÅŸÄ±rÄ± SÄ±cak+Nem     â”‚
+            â”‚  â”œâ”€ KOD-2: YÃ¼ksek SÄ±cak+CO2    â”‚
+            â”‚  â”œâ”€ KOD-3: YÃ¼ksek CO2          â”‚
+            â”‚  â””â”€ KOD-4: KÃ¼f Riski           â”‚
+            â”‚                                 â”‚
+            â”‚  NORMAL Ã–NCELÄ°K:               â”‚
+            â”‚  â”œâ”€ KOD-6: Gece Modu           â”‚
+            â”‚  â”œâ”€ KOD-5: GÃ¼ndÃ¼z HavalandÄ±rma â”‚
+            â”‚  â””â”€ KOD-9: Optimal Durum       â”‚
+            â”‚                                 â”‚
+            â”‚  SULAMA KONTROL:               â”‚
+            â”‚  â”œâ”€ SULAMA-1: Acil (Toprak<20%)â”‚
+            â”‚  â”œâ”€ SULAMA-2: Normal (T<40%)   â”‚
+            â”‚  â”œâ”€ SULAMA-3: AkÅŸam (T<50%)    â”‚
+            â”‚  â”œâ”€ SULAMA-4: YaÄŸmur Ä°ptali    â”‚
+            â”‚  â”œâ”€ SULAMA-5: AÅŸÄ±rÄ± Koruma     â”‚
+            â”‚  â””â”€ SULAMA-6: KÃ¼f Riski        â”‚
+            â””â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                    â”‚
+            â”Œâ”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+            â”‚ KOMUT GÃ–NDERME   â”‚
+            â”‚ - havaac/kapa    â”‚
+            â”‚ - isikac/kapa    â”‚
+            â”‚ - sulaac/kapa    â”‚
+            â”‚ SoftwareSerial TXâ”‚
+            â””â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                    â”‚
+            â”Œâ”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+            â”‚  VERI KAYIT              â”‚
+            â”‚  â”œâ”€ SD Kart (Local)      â”‚
+            â”‚  â”‚  sensor_log.txt       â”‚
+            â”‚  â”‚  + Zaman damgasÄ±      â”‚
+            â”‚  â”‚                       â”‚
+            â”‚  â””â”€ Firebase (Cloud)     â”‚
+            â”‚     (Ä°steÄŸe baÄŸlÄ±)       â”‚
+            â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                    â”‚
+         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+         â”‚                     â”‚
+    â”Œâ”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”        â”Œâ”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”
+    â”‚ UART2 RX2â”‚        â”‚   WEB    â”‚
+    â”‚ 9600 baudâ”‚        â”‚ KULLANICIâ”‚
+    â”‚  KOMUT   â”‚        â”‚  ARAYÃœZÃœ â”‚
+    â””â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”˜        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+         â”‚
+         â”‚ Komutlar: havaac, havakapa,
+         â”‚ isikac, isikkapa, sulaac, sulakapa
+         â”‚
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚               ARDUINO MEGA 2560 (ALICI)                      â”‚
+â”‚                  MANUEL KONTROL Ä°ÅLEME                      â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                              â”‚
+                 â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                 â”‚                         â”‚
+          â”Œâ”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”         â”Œâ”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”
+          â”‚   SERVO     â”‚         â”‚    RÃ–LELER     â”‚
+          â”‚   MOTOR     â”‚         â”‚                â”‚
+          â”‚  MG995 D9   â”‚         â”‚ â”œâ”€ Fan D30     â”‚
+          â”‚  0Â°-95Â°     â”‚         â”‚ â”œâ”€ IÅŸÄ±k D29    â”‚
+          â”‚             â”‚         â”‚ â””â”€ Pompa D31   â”‚
+          â”‚ Titreme Ã–nl.â”‚         â”‚ Active LOW     â”‚
+          â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜         â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
+
+### Sistem AkÄ±ÅŸ Ã–zeti
+
+1. **Arduino Mega (Veri KatmanÄ±):**
+   - SensÃ¶rleri okur (her 5 saniye)
+   - Kalman filtresi uygular (7 sensÃ¶r)
+   - JSON formatÄ±nda NodeMCU'ya gÃ¶nderir (UART2 TX2)
+   - LoRa ile yer istasyonuna broadcast eder
+   - NodeMCU'dan gelen komutlarÄ± iÅŸler (UART2 RX2)
+   - AktuatÃ¶rleri kontrol eder (Servo, RÃ¶leler)
+
+2. **NodeMCU ESP8266 (Karar KatmanÄ±):**
+   - JSON alÄ±r ve parse eder (SoftwareSerial RX)
+   - Karar aÄŸacÄ± algoritmasÄ± Ã§alÄ±ÅŸtÄ±rÄ±r (her 10 saniye)
+   - AkÄ±llÄ± kararlar verir (Ã¶ncelik tabanlÄ±)
+   - Arduino'ya komut gÃ¶nderir (SoftwareSerial TX)
+   - SD Karta ve Firebase'e kaydeder
+   - Web arayÃ¼zÃ¼ sunar (WiFi)
+
+3. **Web KullanÄ±cÄ±sÄ±:**
+   - GerÃ§ek zamanlÄ± sensÃ¶r verileri gÃ¶rÃ¼r
+   - Manuel komutlar gÃ¶nderebilir
+   - Otomatik kontrolÃ¼ aÃ§/kapa yapabilir
 
 ---
 
-## 🧠 Yazılım Mimarisi
+## ğŸ§  YazÄ±lÄ±m Mimarisi
 
-### 1. Modüler Yapı (Modern C++ Tasarımı)
+### 1. Arduino Mega - Veri KatmanÄ± (Pasif)
 
-Proje modüler ve bakımı kolay bir mimari ile tasarlanmıştır. Her modül kendi sorumluluğunu yerine getirir:
+**Sorumluluk:** SensÃ¶r okuma, filtreleme, veri gÃ¶nderimi, komut alma
 
-#### a) Communication Modülü
-- **Konum:** `lib/Communication/` ve `include/Communication.h`
-- **Sorumluluk:** Seri port iletişimi, LoRa veri gönderimi
-- **İçerik:**
-  - `printSeparator()` - Görsel ayırıcı çizgiler
-  - `sendLoRaPacket()` - Binary paket gönderimi
-  - `calculateCRC16()` - Veri doğrulama
-  - `printHexDump()` - Debug için HEX çıktısı
-
-#### b) Sensors Modülü
-- **Konum:** `src/Sensors.cpp` ve `include/Sensors.h`
-- **Sorumluluk:** Tüm sensör okuma işlemleri + Kalman filtreleme
-- **İçerik:**
-  - `SensorReadings` struct (RAW ve FILTERED değerler)
-  - `readBH1750()` - Işık sensörü
-  - `readBME680()` - Hava kalitesi sensörü
-  - `readMHZ14A()` - CO2 sensörü
-  - `readSoilMoisture()` - Toprak nem sensörü
-  - `readAllSensors()` - Tüm sensörleri tek seferde oku
-  - 7 adet KalmanFilter nesnesi (her sensör için)
-
-#### c) KalmanFilter Modülü
-- **Konum:** `src/KalmanFilter.cpp` ve `include/KalmanFilter.h`
-- **Sorumluluk:** 1D Kalman filtresi ile sensör gürültüsü azaltma
-- **İçerik:**
-  - `update(measurement)` - Yeni ölçüm ile filtreleme
-  - `reset()` - Filtreyi sıfırla
-  - `getValue()` - Filtrelenmiş değeri al
-  - `setProcessNoise(q)` - Süreç gürültüsü ayarı
-  - `setMeasurementNoise(r)` - Ölçüm gürültüsü ayarı
-  - `getKalmanGain()` - Kazanç faktörünü görüntüle
-
-#### d) Calculations Modülü
-- **Konum:** `src/Calculations.cpp` ve `include/Calculations.h`
-- **Sorumluluk:** Bilimsel hesaplamalar
-- **İçerik:**
-  - `calculateDewPoint()` - Çiy noktası (Magnus formülü)
-  - `calculateAbsoluteHumidity()` - Mutlak nem
-  - `calculateHeatIndex()` - Hissedilen sıcaklık (Rothfusz)
-  - `calculateVaporPressure()` - Buhar basıncı
-  - `calculateSeaLevelPressure()` - Deniz seviyesi basıncı
-  - `luxToFootCandles()` - Işık birimi dönüşümü
-  - `co2PpmToMgPerM3()` - CO2 yoğunluğu
-  - `calculateVentilationRate()` - Havalandırma oranı
-
-### 2. Ana Döngü (Loop)
+#### Ana DÃ¶ngÃ¼ (Loop)
 ```cpp
 loop() {
-  // Seri port komutlarını kontrol et (Manuel Mod)
-  processSerialCommand()
+  // Manuel komut iÅŸleme (Serial USB + UART2 NodeMCU'dan)
+  processSerialCommand()  // havaac, isikac, sulaac vb.
   
-  // Her 5 saniyede bir sensör okuma ve otomatik kontrol
+  // Her 5 saniyede bir sensÃ¶r okuma
   if (millis() - lastSensorRead >= 5000) {
-    sensors.readAllSensors()  // Modüler sensör okuma (Kalman filtreli)
-    // Filtrelenmiş değerler readings değişkeninde:
-    // readings.temperature_filtered, readings.humidity_filtered vb.
-    
-    calculateValues()      // Calculations modülü kullanılarak hesaplamalar
-    controlGreenhouse()    // Sera kapak kontrolü (otomatik mod)
-    controlIrrigation()    // Sulama kontrolü (otomatik mod)
-    sendLoRaData()        // LoRa ile veri gönder (filtered değerler)
-    printData()           // Seri port çıktısı (RAW ve FILTERED karşılaştırma)
+    sensors.readAllSensors()  // Kalman filtreli okuma
+    sendLoRaData()            // LoRa broadcast
+    sendJSONtoNodeMCU()       // UART2 TX â†’ NodeMCU
     lastSensorRead = millis()
   }
 }
 ```
 
-### 3. LoRa Veri Paketi Yapısı
+#### JSON Veri FormatÄ± (Arduino â†’ NodeMCU)
+```json
+{
+  "temp": 25.14,
+  "hum": 59.36,
+  "pres": 994.74,
+  "gas": 165.89,
+  "lux": 474.85,
+  "co2": 450,
+  "soil": 45.48,
+  "dew": 16.67,
+  "heat": 25.09,
+  "roof": 25,
+  "fan": false,
+  "light": false,
+  "pump": false,
+  "uptime": 330
+}
+```
+
+#### ModÃ¼ler YapÄ±
+- **Sensors.cpp/h:** Kalman filtreli sensÃ¶r okuma
+- **KalmanFilter.cpp/h:** 1D Kalman algoritmasÄ±
+- **Calculations.cpp/h:** Bilimsel hesaplamalar
+- **Communication.cpp/h:** LoRa iletiÅŸimi
+- **SerialCommands.cpp/h:** Komut iÅŸleme (havaac, isikac vb.)
+- **JSONFormatter.cpp/h:** Compact JSON oluÅŸturma
+
+### 2. NodeMCU ESP8266 - Karar KatmanÄ± (Aktif)
+
+**Sorumluluk:** JSON parsing, karar aÄŸacÄ±, komut gÃ¶nderme, web arayÃ¼zÃ¼
+
+#### Ana DÃ¶ngÃ¼ (Loop)
 ```cpp
-#pragma pack(push,1)
-struct SensorDataPacket {
-  // BME680 (16 byte) - FILTERED değerler
-  float temperature;        // Kalman filtreli sıcaklık
-  float humidity;           // Kalman filtreli nem
-  float pressure;           // Kalman filtreli basınç
-  float gas_resistance;     // Kalman filtreli gaz direnci
+loop() {
+  server.handleClient();  // Web isteklerini iÅŸle
   
-  // BH1750 (4 byte) - FILTERED değer
-  float lux;                // Kalman filtreli ışık
+  // Arduino'dan JSON oku (SoftwareSerial)
+  while (arduinoSerial.available()) {
+    // JSON topla ve parse et
+    parseSensorData(jsonBuffer);
+  }
   
-  // MH-Z14A (3 byte) - FILTERED değerler
-  uint16_t co2_ppm;         // Kalman filtreli CO2
-  int8_t co2_temperature;   // CO2 sensör sıcaklığı
+  // Otomatik karar aÄŸacÄ± (her 10 saniye)
+  if (autoControlEnabled && (millis() - lastDecision >= 10000)) {
+    makeDecision();  // AkÄ±llÄ± kontrol algoritmasÄ±
+    lastDecision = millis();
+  }
   
-  // Toprak Nem (6 byte) - FILTERED değer
-  float soil_moisture_percent;  // Kalman filtreli toprak nemi
-  uint16_t soil_moisture_raw;   // Ham ADC değeri
-  
-  // Kontrol Durumları (6 byte)
-  uint8_t roof_position;        // 0-100%
-  uint8_t fan_state;            // 0/1
-  uint8_t light_state;          // 0/1
-  uint8_t pump_state;           // 0/1
-  uint16_t irrigation_duration; // saniye
-  
-  // Hesaplanan Değerler (12 byte)
-  float dew_point;              // Filtrelenmiş verilerden hesaplanır
-  float heat_index;             // Filtrelenmiş verilerden hesaplanır
-  float absolute_humidity;      // Filtrelenmiş verilerden hesaplanır
-  
-  // Sistem (5 byte)
-  uint32_t uptime;              // saniye
-  uint8_t mhz14a_ready;         // 0/1
-  
-  // Veri Bütünlüğü (2 byte)
-  uint16_t crc;
-};
-#pragma pack(pop)
-// TOPLAM: 54 byte
-// Not: Kalman filtreli değerler gönderilir, böylece alıcı tarafta 
-// temiz ve kararlı veriler elde edilir.
+  // Manuel komutlarÄ± Arduino'ya ilet
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    sendCommandToArduino(cmd);
+  }
+}
 ```
 
-### 4. Kalman Filtresi Sistemi
-
-#### Kalman Filtresi Nedir?
-Kalman filtresi, gürültülü sensör ölçümlerinden optimal tahminler üreten matematiksel bir algoritmadır. İki aşamadan oluşur:
-
-1. **Tahmin (Prediction):** Sistemin bir sonraki durumunu tahmin et
-2. **Güncelleme (Update):** Yeni ölçüm ile tahmini düzelt
-
-#### Kalman Filtresi Parametreleri
-
-Her sensör için optimize edilmiş parametreler:
-
-| Sensör | Process Noise (q) | Measurement Noise (r) | Açıklama |
-|--------|-------------------|----------------------|----------|
-| Sıcaklık | 0.001 | 0.5 | Yavaş değişir, orta güven |
-| Nem | 0.001 | 1.0 | Yavaş değişir, düşük güven |
-| Basınç | 0.0001 | 0.1 | Çok yavaş, yüksek güven |
-| Gaz | 0.01 | 5.0 | Hızlı değişir, düşük güven |
-| Işık | 0.01 | 2.0 | Orta hız, orta güven |
-| CO2 | 0.01 | 10.0 | Orta hız, düşük güven |
-| Toprak Nem | 0.001 | 2.0 | Yavaş değişir, orta güven |
-
-**q (Process Noise):** Sistem dinamiklerindeki belirsizlik
-- Düşük q → Sistem durağan kabul edilir
-- Yüksek q → Sistem hızlı değişebilir
-
-**r (Measurement Noise):** Ölçüm gürültüsü
-- Düşük r → Sensöre yüksek güven
-- Yüksek r → Sensöre düşük güven
-
-#### Kalman Filtresi Algoritması
-
+#### Karar AÄŸacÄ± AlgoritmasÄ±
 ```cpp
-class KalmanFilter {
-private:
-    float _x;  // Durum tahmini (estimated state)
-    float _p;  // Tahmin hatası (estimation error)
-    float _q;  // Süreç gürültüsü (process noise)
-    float _r;  // Ölçüm gürültüsü (measurement noise)
-    
-public:
-    float update(float measurement) {
-        // TAHMİN AŞAMASI (Prediction)
-        _p = _p + _q;  // Tahmin hatası artar
-        
-        // GÜNCELLEME AŞAMASI (Update)
-        float k = _p / (_p + _r);  // Kalman kazancı
-        _x = _x + k * (measurement - _x);  // Durum güncellemesi
-        _p = (1 - k) * _p;  // Hata güncellemesi
-        
-        return _x;  // Filtrelenmiş değer
-    }
-};
+void makeDecision() {
+  // SensÃ¶r verilerini al
+  float temp = currentSensors.temperature;
+  float hum = currentSensors.humidity;
+  int co2 = currentSensors.co2;
+  float soil = currentSensors.soilMoisture;
+  float lux = currentSensors.lux;
+  
+  // KRÄ°TÄ°K Ã–NCELÄ°K 1: Donma Riski
+  if (temp < 10.0 || dewPoint < 5.0) {
+    sendCommandSafe("havakapa");
+    sendCommandSafe("sulakapa");
+    return; // DiÄŸer kontroller atla
+  }
+  
+  // KRÄ°TÄ°K Ã–NCELÄ°K 2: FÄ±rtÄ±na Riski
+  if (pres < 985.0) {
+    sendCommandSafe("havakapa");
+    sendCommandSafe("sulakapa");
+    return;
+  }
+  
+  // YÃœKSEK Ã–NCELÄ°K: AÅŸÄ±rÄ± SÄ±cak + Nem
+  if (temp > 32.0 && hum > 70.0) {
+    sendCommandSafe("havaac");
+    return;
+  }
+  
+  // ... diÄŸer karar kodlarÄ±
+  
+  // SULAMA KONTROL
+  if (soil < 20.0 && temp > 28.0) {
+    sendCommandSafe("sulaac");
+  }
+  
+  // OPTIMAL DURUM: Enerji tasarrufu
+  if (temp >= 20 && temp <= 26 && hum >= 50 && hum <= 70) {
+    // Gereksiz sistemleri kapat
+  }
+}
 ```
 
-#### Kalman Filtresi Avantajları
-
-✅ **Gürültü Azaltma:** Sensör titremeleri düzeltilir  
-✅ **Gerçek Değişimleri Koruma:** Ani sıcaklık artışları korunur  
-✅ **Düşük Hesaplama Maliyeti:** Arduino'da hızlı çalışır  
-✅ **Otomatik Adaptasyon:** Kalman kazancı kendini ayarlar  
-✅ **Kararlı Kontrol:** Röle ve servo daha az tetiklenir  
-
-#### Örnek: Kalman Filtresi Etkisi
-
-**Toprak Nem Sensörü (Gerçek Test Verisi):**
-
-| Zaman | RAW Değer | FILTERED Değer | Fark |
-|-------|-----------|----------------|------|
-| 0s | 65.0% | 65.00% | 0% |
-| 5s | 100.0% | 76.67% | -23.3% (ani sıçrama filtrelendi) |
-| 10s | 99.5% | 82.52% | -17.0% |
-| 15s | 98.0% | 86.02% | -12.0% |
-| 20s | 97.5% | 88.36% | -9.1% |
-
-**Sonuç:** Ham sensör 100%'e sıçradı (muhtemelen gürültü), ancak Kalman filtresi gerçek değişimi kademeli takip etti.
-
-#### Serial Çıktı Formatı (RAW vs FILTERED)
-
-```
---- GY-30 (BH1750) Light Sensor ---
-Light Level: 447.50 lux (RAW) | 447.77 lux (FILTERED)
-  -> Bright
-
---- BME680 Air Quality Sensor ---
-Temperature: 23.14 C (RAW) | 22.93 C (FILTERED)
-Humidity: 58.76 % (RAW) | 58.75 % (FILTERED)
-Pressure: 994.50 hPa (RAW) | 994.48 hPa (FILTERED)
-Gas Resistance: 166.02 KOhm (RAW) | 168.74 KOhm (FILTERED)
-
---- MH-Z14A CO2 Sensor ---
-CO2 Level: 450 ppm (RAW) | 450 ppm (FILTERED)
-
---- MH Water Soil Moisture Sensor ---
-Soil Moisture: 100.00 % (RAW) | 88.36 % (FILTERED)
-  -> ISLAK TOPRAK (Sulamaya gerek yok)
+#### JSON Parsing (Manuel)
+```cpp
+float parseJsonFloat(String json, String key) {
+  int keyIndex = json.indexOf("\"" + key + "\":");
+  int valueStart = keyIndex + key.length() + 3;
+  int valueEnd = json.indexOf(',', valueStart);
+  return json.substring(valueStart, valueEnd).toFloat();
+}
 ```
 
-**Önemli Not:** LoRa ile gönderilen paketlerde **sadece FILTERED değerler** kullanılır. Bu sayede alıcı tarafta temiz ve kararlı veriler işlenir.
+#### Komut GÃ¼venliÄŸi
+```cpp
+void sendCommandSafe(String cmd, String& lastCmd, unsigned long& lastTime) {
+  // 30 saniye cooldown - AynÄ± komut tekrar gÃ¶nderilmez
+  if (cmd == lastCmd && (millis() - lastTime) < 30000) {
+    return;
+  }
+  sendCommandToArduino(cmd);
+  lastCmd = cmd;
+  lastTime = millis();
+}
+```
 
-### 5. Kontrol Sistemi
+#### Web Server Endpoints
+```cpp
+server.on("/", handleRoot);              // Ana sayfa (Kontrol paneli)
+server.on("/command", handleCommand);    // Komut gÃ¶nder (?cmd=havaac)
+server.on("/status", handleStatus);      // Durum sorgula (JSON)
+```
 
-#### a) Sera Kapak ve Havalandırma Kontrolü
-- **Girdi:** Sıcaklık (FILTERED), Nem (FILTERED), CO2 (FILTERED), Işık (FILTERED), Basınç (FILTERED)
-- **Çıktı:** Kapak pozisyonu (0-100%) ve Fan durumu (AÇIK/KAPALI)
-- **Mod:**
-  - **Otomatik:** Kalman filtreli sensör verilerine göre karar algoritması
-  - **Manuel:** Seri port komutları (havaac/havakapa)
-- **Frekans:** 5 saniye
-- **Histerezis:** 30 saniye (titreme önleme)
-- **Avantaj:** Kalman filtresi sayesinde kapak gereksiz açılıp kapanmaz
+### 3. Web Kontrol Paneli
 
-#### b) Aydınlatma Kontrolü
-- **Çıktı:** LED/Lamba AÇIK/KAPALI
-- **Mod:**
-  - **Otomatik:** Kalman filtreli ışık sensörü verilerine göre (gelecekte eklenebilir)
-  - **Manuel:** Seri port komutları (isikac/isikkapa)
-- **Pin:** D29 (Active LOW) - D7'den taşındı
+**URL:** `http://<NodeMCU-IP>/`
 
-#### c) Sulama Kontrolü
-- **Girdi:** Toprak Nemi (FILTERED), Sıcaklık (FILTERED), Hava Nemi (FILTERED), Işık (FILTERED)
-- **Çıktı:** Pompa AÇIK/KAPALI
-- **Mod:**
-  - **Otomatik:** Kalman filtreli toprak nem sensörü verilerine göre
-  - **Manuel:** Seri port komutları (sulaac/sulakapa)
-- **Frekans:** 5 saniye
-- **Minimum Bekleme:** 10 dakika
-- **Avantaj:** Kalman filtresi toprak nem gürültüsünü azaltarak gereksiz sulama önler
-- **⚠️ Güvenlik Özelliği:** 
-  - Sulama başladığında diğer tüm sistemler otomatik kapatılır
-  - Sulama bittiğinde sistemler önceki durumuna geri döner
-  - Bu özellik elektriksel güvenlik ve su-elektrik teması riskini önler
+**Ã–zellikler:**
+- GerÃ§ek zamanlÄ± sensÃ¶r verileri (3 saniye refresh)
+- 6 kontrol butonu (Hava aÃ§/kapat, IÅŸÄ±k aÃ§/kapat, Sulama aÃ§/kapat)
+- Otomatik kontrol aÃ§/kapa butonu
+- Sistem durumu (IP, RSSI, Uptime)
+- Responsive tasarÄ±m (mobil uyumlu)
 
-#### d) Manuel Kontrol (Seri Port)
-- **Baud Rate:** 115200
-- **Komutlar:**
-  - `havaac`: Kapak aç + Fan aç
-  - `havakapa`: Kapak kapat + Fan kapat
-  - `isikac`: Işık aç
-  - `isikkapa`: Işık kapat
-  - `sulaac`: Sulama aç (diğer sistemleri kapat)
-  - `sulakapa`: Sulama kapat (diğer sistemleri geri yükle)
-- **Özellikler:** 
-  - Servo titreme önleme (attach/detach pattern)
-  - Durum kaydetme ve geri yükleme (sulama güvenliği)
-  - Büyük/küçük harf duyarsız komut işleme
+**JavaScript AJAX:**
+```javascript
+// Komut gÃ¶nder
+function cmd(c) {
+  fetch('/command?cmd=' + c)
+    .then(r => r.text())
+    .then(d => alert(d));
+}
 
-#### e) LoRa Haberleşme
-- **Protokol:** Binary paket transferi
-- **Paket Boyutu:** 54 byte (Kalman filtreli veriler)
-- **Gönderim Frekansı:** 5 saniye
-- **Hata Kontrolü:** CRC-16
-- **Mod:** Normal (M0=LOW, M1=LOW)
-- **Menzil:** 3 km (açık alan)
-- **Başarı Oranı:** >95% (ideal koşullar)
-- **Veri Kalitesi:** Yüksek (Kalman filtreli temiz veriler gönderilir)
+// Otomatik kontrol toggle
+function toggleAuto() {
+  fetch('/command?cmd=toggleauto')
+    .then(r => r.text())
+    .then(d => location.reload());
+}
+
+// Durum gÃ¼ncelle (3 saniye)
+setInterval(updateStatus, 3000);
+```
 
 ---
 
-## 📈 Bilimsel Hesaplamalar
+## ğŸ“ˆ Bilimsel Hesaplamalar
 
-### 1. Çiy Noktası (Dew Point)
-**Formül:** Magnus-Tetens
+### 1. Ã‡iy NoktasÄ± (Dew Point)
+**FormÃ¼l:** Magnus-Tetens
 ```
-Td = (b × α) / (a - α)
-α = (a×T)/(b+T) + ln(RH/100)
+Td = (b Ã— Î±) / (a - Î±)
+Î± = (aÃ—T)/(b+T) + ln(RH/100)
 ```
-**Kullanım:** Küf riski tespiti
+**KullanÄ±m:** KÃ¼f riski tespiti
 
-### 2. Hissedilen Sıcaklık (Heat Index)
-**Formül:** Rothfusz (NOAA)
+### 2. Hissedilen SÄ±caklÄ±k (Heat Index)
+**FormÃ¼l:** Rothfusz (NOAA)
 ```
-HI = -42.379 + 2.049T + 10.143RH - 0.225T×RH + ...
+HI = -42.379 + 2.049T + 10.143RH - 0.225TÃ—RH + ...
 ```
-**Kullanım:** Bitki stres tespiti
+**KullanÄ±m:** Bitki stres tespiti
 
 ### 3. Mutlak Nem (Absolute Humidity)
-**Formül:** Termodinamik
+**FormÃ¼l:** Termodinamik
 ```
-AH = (e × 2.1674) / (T + 273.15)
+AH = (e Ã— 2.1674) / (T + 273.15)
 ```
-**Kullanım:** Buharlaşma hesabı
+**KullanÄ±m:** BuharlaÅŸma hesabÄ±
 
 ### 4. CO2 Konsantrasyonu
-**Formül:** İdeal Gaz Yasası
+**FormÃ¼l:** Ä°deal Gaz YasasÄ±
 ```
-C(mg/m³) = (ppm × M × P) / (R × T)
+C(mg/mÂ³) = (ppm Ã— M Ã— P) / (R Ã— T)
 ```
-**Kullanım:** Havalandırma hesabı
+**KullanÄ±m:** HavalandÄ±rma hesabÄ±
 
-### 5. Deniz Seviyesi Basıncı
-**Formül:** Barometrik
+### 5. Deniz Seviyesi BasÄ±ncÄ±
+**FormÃ¼l:** Barometrik
 ```
-P0 = P × exp((g × M × h) / (R × T))
+P0 = P Ã— exp((g Ã— M Ã— h) / (R Ã— T))
 ```
-**Kullanım:** Hava durumu tahmini
+**KullanÄ±m:** Hava durumu tahmini
 
 ---
 
-## 🎯 Kontrol Algoritmaları
+## ğŸ¯ Kontrol AlgoritmalarÄ±
 
-### Sera Kapak Kontrol Kodları
+### Sera Kapak Kontrol KodlarÄ±
 
-| Kod | Öncelik | Koşul | Kapak | Açıklama |
+| Kod | Ã–ncelik | KoÅŸul | Kapak | AÃ§Ä±klama |
 |-----|---------|-------|-------|----------|
-| KOD-7 | 1 | Sıcaklık < 10°C | 0% | Donma riski |
-| KOD-1 | 2 | Sıcaklık > 32°C + Nem > 70% | 100% | Aşırı sıcak |
-| KOD-8 | 3 | Basınç < 985 hPa | 0% | Fırtına |
-| KOD-2 | 4 | Sıcaklık > 28°C + CO2 > 800 | 75% | Yüksek sıcaklık |
-| KOD-3 | 5 | CO2 > 1500 ppm | 50% | Yüksek CO2 |
-| KOD-4 | 6 | Nem > 85% | 40% | Küf riski |
-| KOD-6 | 7 | Gece + Sıcaklık < 18°C | 0% | Gece koruma |
-| KOD-5 | 8 | Gündüz + Normal sıcaklık | 25% | Havalandırma |
-| KOD-9 | 9 | İdeal koşullar | 0% | Stabil sistem |
+| KOD-7 | 1 | SÄ±caklÄ±k < 10Â°C | 0% | Donma riski |
+| KOD-1 | 2 | SÄ±caklÄ±k > 32Â°C + Nem > 70% | 100% | AÅŸÄ±rÄ± sÄ±cak |
+| KOD-8 | 3 | BasÄ±nÃ§ < 985 hPa | 0% | FÄ±rtÄ±na |
+| KOD-2 | 4 | SÄ±caklÄ±k > 28Â°C + CO2 > 800 | 75% | YÃ¼ksek sÄ±caklÄ±k |
+| KOD-3 | 5 | CO2 > 1500 ppm | 50% | YÃ¼ksek CO2 |
+| KOD-4 | 6 | Nem > 85% | 40% | KÃ¼f riski |
+| KOD-6 | 7 | Gece + SÄ±caklÄ±k < 18Â°C | 0% | Gece koruma |
+| KOD-5 | 8 | GÃ¼ndÃ¼z + Normal sÄ±caklÄ±k | 25% | HavalandÄ±rma |
+| KOD-9 | 9 | Ä°deal koÅŸullar | 0% | Stabil sistem |
 
-### Sulama Kontrol Kodları
+### Sulama Kontrol KodlarÄ±
 
-| Kod | Öncelik | Koşul | Pompa | Süre | Açıklama |
+| Kod | Ã–ncelik | KoÅŸul | Pompa | SÃ¼re | AÃ§Ä±klama |
 |-----|---------|-------|-------|------|----------|
-| SULAMA-5 | 1 | Toprak > 90% | KAPAT | 24h | Aşırı sulama |
-| SULAMA-7 | 2 | Gece + Soğuk | KAPAT | - | Gece yasağı |
-| SULAMA-4 | 3 | Yağmur | KAPAT | 30dk | Doğal yağış |
-| SULAMA-6 | 4 | Nem yüksek | KAPAT | - | Küf riski |
-| SULAMA-1 | 5 | Toprak < 20% + Sıcak | AÇIK | 30s | Acil |
-| SULAMA-3 | 6 | Akşam + Kuru | AÇIK | 25s | Optimal |
-| SULAMA-2 | 7 | Gündüz + Kuru | AÇIK | 20s | Normal |
-| SULAMA-8 | 8 | Toprak 50-70% | KAPAT | - | İdeal |
+| SULAMA-5 | 1 | Toprak > 90% | KAPAT | 24h | AÅŸÄ±rÄ± sulama |
+| SULAMA-7 | 2 | Gece + SoÄŸuk | KAPAT | - | Gece yasaÄŸÄ± |
+| SULAMA-4 | 3 | YaÄŸmur | KAPAT | 30dk | DoÄŸal yaÄŸÄ±ÅŸ |
+| SULAMA-6 | 4 | Nem yÃ¼ksek | KAPAT | - | KÃ¼f riski |
+| SULAMA-1 | 5 | Toprak < 20% + SÄ±cak | AÃ‡IK | 30s | Acil |
+| SULAMA-3 | 6 | AkÅŸam + Kuru | AÃ‡IK | 25s | Optimal |
+| SULAMA-2 | 7 | GÃ¼ndÃ¼z + Kuru | AÃ‡IK | 20s | Normal |
+| SULAMA-8 | 8 | Toprak 50-70% | KAPAT | - | Ä°deal |
 
 ---
 
-## 📡 Seri İletişim
+## ğŸ“¡ Seri Ä°letiÅŸim Protokolleri
 
-### Verici Sistemi (115200 baud)
+### 1. USB Seri Port (Arduino â†” PC)
+- **BaÄŸlantÄ±:** Arduino USB (Serial0)
+- **Baud Rate:** 115200
+- **AmaÃ§:** Debugging, manuel komutlar, sistem izleme
+- **Veri FormatÄ±:** Human-readable text
+
+**Ã‡Ä±ktÄ± FormatÄ±:**
 ```
 --- New Reading ---
 
 --- GY-30 (BH1750) Light Sensor ---
 Light Level: 475.00 lux (RAW) | 474.85 lux (FILTERED)
-Light Level: 44.13 fc
   -> Bright
 
 --- BME680 Air Quality Sensor ---
 Temperature: 25.16 C (RAW) | 25.14 C (FILTERED)
-Pressure: 994.75 hPa (RAW) | 994.74 hPa (FILTERED)
 Humidity: 59.38 % (RAW) | 59.36 % (FILTERED)
+Pressure: 994.75 hPa (RAW) | 994.74 hPa (FILTERED)
 Gas Resistance: 165.22 KOhm (RAW) | 165.89 KOhm (FILTERED)
-...
 
 --- MH-Z14A CO2 Sensor ---
 CO2 Level: 450 ppm (RAW) | 450 ppm (FILTERED)
-Sensor Temperature: 24 C
-...
 
 --- MH Water Soil Moisture Sensor ---
 Soil Moisture: 45.50 % (RAW) | 45.48 % (FILTERED)
   -> NORMAL (Sulama gerekli)
-...
 
 >>> LORA VERI GONDERIMI <<<
 Paket Boyutu: 54 byte (Kalman filtreli veriler)
-[DEBUG] Gonderilecek Paket Ozeti:
-  Sicaklik: 25.14 C (FILTERED)
-  Nem: 59.36 % (FILTERED)
-  CO2: 450 ppm (FILTERED)
-  Toprak Nem: 45.48 % (FILTERED)
-  Sera Kapak: 25 %
-  Sulama: KAPALI
-  CRC: 0x1A2B
+CRC: 0x1A2B
 [LORA] *** PAKET BASARIYLA GONDERILDI ***
->>> LORA GONDERIM BITTI <<<
 ```
 
-### Alıcı Sistemi - Yer İstasyonu (9600 baud)
+**Manuel Komutlar:**
 ```
-=====================================================
-        AKILLI TARIM SISTEMI - CANLI VERI           
-=====================================================
+havaac     â†’ Kapak aÃ§ + Fan Ã§alÄ±ÅŸtÄ±r
+havakapa   â†’ Kapak kapat + Fan durdur
+isikac     â†’ LED/Lamba aÃ§
+isikkapa   â†’ LED/Lamba kapat
+sulaac     â†’ Sulama aÃ§
+sulakapa   â†’ Sulama kapat
+```
 
-*** PAKET BASARIYLA ALINDI ***
+### 2. UART2 Bidirectional (Arduino Mega â†” NodeMCU)
+- **Arduino TarafÄ±:** Serial2 (TX2/RX2 - Pin 16/17)
+- **NodeMCU TarafÄ±:** SoftwareSerial (D1=RX, D2=TX)
+- **Baud Rate:** 9600
+- **AmaÃ§:** JSON sensÃ¶r verisi (Arduino â†’ NodeMCU) + Komutlar (NodeMCU â†’ Arduino)
+- **Veri FormatÄ±:** Compact JSON + Text Commands
 
------------------------------------------------------
->>> SISTEM BILGILERI <<<
------------------------------------------------------
-Sistem Calisma Suresi: 0s 5dk 30sn
-MH-Z14A CO2 Sensor: HAZIR
-CRC Kontrolu: 0x1A2B
+#### Arduino â†’ NodeMCU (JSON SensÃ¶r Verisi)
+**Frekans:** 5 saniye  
+**Format:** Compact JSON (newline terminated)
 
------------------------------------------------------
->>> HAVA KALITESI (BME680) <<<
------------------------------------------------------
-Sicaklik       : 25.16 C  [Ideal]
-Nem            : 59.38 %  [Ideal]
-Basinc         : 994.75 hPa
-Gaz Direnci    : 165.22 KOhm  [Iyi]
+```json
+{"temp":25.14,"hum":59.36,"pres":994.74,"gas":165.89,"lux":474.85,"co2":450,"soil":45.48,"dew":16.67,"heat":25.09,"roof":25,"fan":false,"light":false,"pump":false,"uptime":330}
+```
 
------------------------------------------------------
->>> ISIK SEVIYESI (BH1750) <<<
------------------------------------------------------
-Isik Siddeti   : 475.0 lux  [Parlak]
-               = 44.13 fc (foot-candles)
+**JSON Key Mapping:**
+| Key | AÃ§Ä±klama | Veri Tipi | Birim |
+|-----|----------|-----------|-------|
+| `temp` | Kalman filtreli sÄ±caklÄ±k | float | Â°C |
+| `hum` | Kalman filtreli nem | float | % |
+| `pres` | Kalman filtreli basÄ±nÃ§ | float | hPa |
+| `gas` | Kalman filtreli gaz direnci | float | KÎ© |
+| `lux` | Kalman filtreli Ä±ÅŸÄ±k | float | lux |
+| `co2` | Kalman filtreli CO2 | int | ppm |
+| `soil` | Kalman filtreli toprak nemi | float | % |
+| `dew` | Hesaplanan Ã§iy noktasÄ± | float | Â°C |
+| `heat` | Hesaplanan hissedilen sÄ±caklÄ±k | float | Â°C |
+| `roof` | Kapak pozisyonu | int | % (0-100) |
+| `fan` | Fan durumu | bool | true/false |
+| `light` | IÅŸÄ±k durumu | bool | true/false |
+| `pump` | Pompa durumu | bool | true/false |
+| `uptime` | Sistem Ã§alÄ±ÅŸma sÃ¼resi | int | saniye |
 
------------------------------------------------------
->>> CO2 SEVIYESI (MH-Z14A) <<<
------------------------------------------------------
-CO2 Konsant.   : 450 ppm  [Mukemmel]
-Sensor Sicak.  : 24 C
-Sensor Durum   : Stabil
+**GÃ¼venilirlik:**
+- Kalman filtreli temiz veriler
+- Compact format (~250 byte)
+- Newline delimiter
+- 5 saniyelik periyodik gÃ¶nderim
 
------------------------------------------------------
->>> TOPRAK NEM SENSORU <<<
------------------------------------------------------
-Toprak Nemi    : 45.5 %  [Optimal]
-Ham Deger      : 512
+#### NodeMCU â†’ Arduino (Kontrol KomutlarÄ±)
+**Frekans:** Olay tabanlÄ± (karar aÄŸacÄ± tetiklemesinde)  
+**Format:** Newline-terminated text commands
 
------------------------------------------------------
->>> HESAPLANAN DEGERLER <<<
------------------------------------------------------
-Ciy Noktasi         : 16.67 C
-Hissedilen Sicaklik : 25.09 C
-Mutlak Nem          : 8.14 g/m3
-Sicak-Ciy Farki     : 8.49 C  [Normal]
+**Komut Seti:**
+```
+havaac     â†’ Sera kapaÄŸÄ±nÄ± aÃ§ + Fan Ã§alÄ±ÅŸtÄ±r
+havakapa   â†’ Sera kapaÄŸÄ±nÄ± kapat + Fan durdur
+isikac     â†’ AydÄ±nlatma aÃ§
+isikkapa   â†’ AydÄ±nlatma kapat
+sulaac     â†’ Sulama pompasÄ±nÄ± aÃ§
+sulakapa   â†’ Sulama pompasÄ±nÄ± kapat
+```
 
------------------------------------------------------
->>> SERA KONTROL SISTEMLERI <<<
------------------------------------------------------
-Sera Kapagi    : 25 %  [AZ ACIK]
-Sulama Pompasi : KAPALI
+**Komut Ä°ÅŸleme (Arduino tarafÄ±nda):**
+```cpp
+void processSerialCommand() {
+  if (Serial2.available()) {
+    String cmd = Serial2.readStringUntil('\n');
+    cmd.trim();
+    cmd.toLowerCase();
+    
+    // Komut iÅŸle
+    if (cmd == "havaac") {
+      // Servo aÃ§, fan Ã§alÄ±ÅŸtÄ±r
+    } else if (cmd == "sulaac") {
+      // Pompa aÃ§ (gÃ¼venlik: diÄŸer sistemleri kapat)
+    }
+  }
+}
+```
 
------------------------------------------------------
->>> GENEL DEGERLENDIRME <<<
------------------------------------------------------
-Sera Saglik Skoru: 85/100  [MUKEMMEL]
+**Cooldown MekanizmasÄ± (NodeMCU tarafÄ±nda):**
+```cpp
+void sendCommandSafe(String cmd) {
+  // 30 saniye iÃ§inde aynÄ± komut tekrar gÃ¶nderilmez
+  if (cmd == lastCommand && (millis() - lastCommandTime) < 30000) {
+    return;
+  }
+  arduinoSerial.println(cmd);
+  lastCommand = cmd;
+  lastCommandTime = millis();
+}
+```
 
-Aktif Uyarilar:
-  Uyari yok - Tum sistemler normal
+### 3. LoRa Wireless (Arduino â†’ Yer Ä°stasyonu)
+- **BaÄŸlantÄ±:** E220-900T22D(JP) modÃ¼lÃ¼ (Serial1 - TX1/RX1)
+- **Baud Rate:** 9600
+- **Frekans BandÄ±:** 868 MHz (TÃ¼rkiye iÃ§in 900 MHz ayarlandÄ±)
+- **Menzil:** 3 km (aÃ§Ä±k alan)
+- **AmaÃ§:** Uzak mesafe sensÃ¶r verisi broadcast
+- **Veri FormatÄ±:** Binary struct (CRC-16 korumalÄ±)
+
+**Binary Paket YapÄ±sÄ± (54 byte):**
+```cpp
+#pragma pack(push,1)
+struct SensorDataPacket {
+  // BME680 (16 byte)
+  float temperature;         // Â°C
+  float humidity;            // %
+  float pressure;            // hPa
+  float gas_resistance;      // KÎ©
   
-Kalman Filter Durumu:
-  ✓ Gurultu azaltma aktif
-  ✓ Kararli veri akisi
-  ✓ Rele ve servo gereksiz tetiklenmeleri onlendi
-
------------------------------------------------------
->>> ILETISIM ISTATISTIKLERI <<<
------------------------------------------------------
-Oturum Suresi     : 5 dk 30 sn
-Basarili Paket    : 66
-Bozuk Paket       : 2
-Basari Orani      : 97.1 %
-Paket Hizi        : 12.0 paket/dk
-Paket Boyutu      : 54 byte (Kalman filtreli)
------------------------------------------------------
+  // BH1750 (4 byte)
+  float lux;                 // lux
+  
+  // MH-Z14A (3 byte)
+  uint16_t co2_ppm;          // ppm
+  int8_t co2_temperature;    // Â°C
+  
+  // Soil Moisture (6 byte)
+  float soil_moisture_percent;  // %
+  uint16_t soil_moisture_raw;   // ADC
+  
+  // Control States (6 byte)
+  uint8_t roof_position;        // 0-100%
+  uint8_t fan_state;            // 0/1
+  uint8_t light_state;          // 0/1
+  uint8_t pump_state;           // 0/1
+  uint16_t irrigation_duration; // s
+  
+  // Calculations (12 byte)
+  float dew_point;              // Â°C
+  float heat_index;             // Â°C
+  float absolute_humidity;      // g/mÂ³
+  
+  // System (5 byte)
+  uint32_t uptime;              // s
+  uint8_t mhz14a_ready;         // 0/1
+  
+  // Integrity (2 byte)
+  uint16_t crc;
+};
+#pragma pack(pop)
 ```
+
+**CRC-16 DoÄŸrulama:**
+```cpp
+uint16_t calculateCRC16(uint8_t* data, uint16_t length) {
+  uint16_t crc = 0xFFFF;
+  for (uint16_t i = 0; i < length; i++) {
+    crc ^= data[i];
+    for (uint8_t j = 0; j < 8; j++) {
+      if (crc & 0x0001) {
+        crc = (crc >> 1) ^ 0xA001;
+      } else {
+        crc >>= 1;
+      }
+    }
+  }
+  return crc;
+}
+```
+
+### 4. Ä°letiÅŸim ProtokolÃ¼ KarÅŸÄ±laÅŸtÄ±rmasÄ±
+
+| Protokol | Baud | Format | Boyut | Frekans | Menzil | GÃ¼venilirlik |
+|----------|------|--------|-------|---------|--------|--------------|
+| USB Serial | 115200 | Text | ~500B | 5s | 5m | YÃ¼ksek (kablolu) |
+| UART2 (TX) | 9600 | JSON | ~250B | 5s | 30cm | Ã‡ok YÃ¼ksek (kablolu) |
+| UART2 (RX) | 9600 | Text | ~10B | Olay | 30cm | Ã‡ok YÃ¼ksek (kablolu) |
+| LoRa | 9600 | Binary | 54B | 5s | 3km | Orta (CRC korumalÄ±) |
+
+### 5. Hata YÃ¶netimi ve Tolerans
+
+**UART2 JSON Parsing HatalarÄ±:**
+- NodeMCU JSON parsing hatalarÄ±nda eski sensÃ¶r deÄŸerlerini kullanÄ±r
+- 60 saniye boyunca veri gelmezse "BaÄŸlantÄ± KaybÄ±" uyarÄ±sÄ±
+- Timeout durumunda karar aÄŸacÄ± Ã§alÄ±ÅŸmaz (gÃ¼venlik)
+
+**LoRa Paket HatalarÄ±:**
+- CRC kontrolÃ¼ baÅŸarÄ±sÄ±zsa paket atÄ±lÄ±r
+- Yer istasyonu son geÃ§erli paketi kullanÄ±r
+- 30 saniye boyunca paket gelmezse "Sinyal KaybÄ±" uyarÄ±sÄ±
+
+**Komut Ä°letimi HatalarÄ±:**
+- NodeMCU 30 saniye cooldown ile gereksiz komut tekrarÄ±nÄ± Ã¶nler
+- Arduino komut iÅŸleme baÅŸarÄ±sÄ±z olursa sonraki dÃ¶ngÃ¼de tekrar dener
+- GÃ¼venlik kritiÄŸi: Sulama komutlarÄ±nda tÃ¼m sistemler kapatÄ±lÄ±r
 
 ---
 
-## 🔋 Güç Tüketimi
+## ğŸ”‹ GÃ¼Ã§ TÃ¼ketimi
 
-### Verici Sistem
-| Bileşen | Akım | Güç |
-|---------|------|-----|
-| Arduino Mega | ~50mA | 0.25W |
-| BH1750 | ~0.2mA | 0.001W |
-| BME680 | ~3.7mA | 0.018W |
-| MH-Z14A | ~150mA | 0.75W |
-| Soil Sensor | ~20mA | 0.1W |
-| LoRa E32 TX | ~120mA | 0.6W |
-| Servo (SG90) | ~100-500mA | 0.5-2.5W |
-| Röle + Pompa | ~50mA + Pompa | 0.25W + Pompa |
-| **TOPLAM** | **~500mA** | **~2.5-5W** |
+### Arduino Mega Verici Sistem (SensÃ¶r KatmanÄ±)
+| BileÅŸen | AkÄ±m | GÃ¼Ã§ | AÃ§Ä±klama |
+|---------|------|-----|----------|
+| Arduino Mega | ~50mA | 0.25W | Ana iÅŸlemci |
+| BH1750 | ~0.2mA | 0.001W | IÅŸÄ±k sensÃ¶rÃ¼ |
+| BME680 | ~3.7mA | 0.018W | Hava kalitesi sensÃ¶rÃ¼ |
+| MH-Z14A | ~150mA | 0.75W | CO2 sensÃ¶rÃ¼ (en yÃ¼ksek tÃ¼ketim) |
+| Soil Sensor | ~20mA | 0.1W | Toprak nem sensÃ¶rÃ¼ |
+| LoRa E32 TX | ~120mA | 0.6W | Uzak mesafe iletiÅŸim |
+| Servo (SG90) | ~100-500mA | 0.5-2.5W | Sera kapaÄŸÄ± (sadece harekette) |
+| RÃ¶le ModÃ¼lÃ¼ | ~50mA | 0.25W | Fan + IÅŸÄ±k + Pompa kontrol |
+| Sulama PompasÄ± | ~200-500mA | 1-2.5W | Sadece sulama sÄ±rasÄ±nda |
+| **TOPLAM (Normal)** | **~400mA** | **~2W** | SensÃ¶r okuma + LoRa TX |
+| **TOPLAM (Peak)** | **~1000mA** | **~5W** | Servo + Pompa aktif |
 
-### Alıcı Sistem (Yer İstasyonu)
-| Bileşen | Akım | Güç |
+### NodeMCU ESP8266 (Karar KatmanÄ±)
+| BileÅŸen | AkÄ±m | GÃ¼Ã§ | AÃ§Ä±klama |
+|---------|------|-----|----------|
+| ESP8266 (Aktif) | ~80mA | 0.4W | WiFi + Karar algoritmasÄ± |
+| ESP8266 (WiFi TX) | ~170mA | 0.85W | Web server isteÄŸi sÄ±rasÄ±nda |
+| SD Card ModÃ¼lÃ¼ | ~30mA | 0.15W | Veri loglama |
+| **TOPLAM (Normal)** | **~110mA** | **~0.55W** | JSON parsing + karar |
+| **TOPLAM (Peak)** | **~200mA** | **~1W** | Web + SD yazma |
+
+### AlÄ±cÄ± Sistem (Yer Ä°stasyonu)
+| BileÅŸen | AkÄ±m | GÃ¼Ã§ |
 |---------|------|-----|
 | Arduino | ~50mA | 0.25W |
 | LoRa E32 RX | ~20mA | 0.1W |
 | **TOPLAM** | **~70mA** | **~0.35W** |
 
-*Not: Pompa gücü modele göre değişir (genelde 5-12W)*
+### GÃ¼Ã§ KaynaÄŸÄ± Ã–nerileri
+- **Arduino Mega Sistemi:** 5V 3A adaptÃ¶r (gÃ¼venlik marjÄ± ile)
+- **NodeMCU Sistemi:** 5V 1A adaptÃ¶r (USB gÃ¼Ã§ yeterli)
+- **Yer Ä°stasyonu:** 5V 500mA adaptÃ¶r veya USB gÃ¼Ã§
 
-**Önerilen Güç Kaynakları:**
-- Verici: 5V 3A adaptör
-- Alıcı: 5V 1A adaptör veya USB
+### Enerji Tasarrufu Stratejileri
+âœ… **Servo Detach:** Servo motor sadece harekette gÃ¼Ã§ alÄ±r (titreme Ã¶nleme)  
+âœ… **Kalman Filtresi:** Gereksiz rÃ¶le/servo tetiklenmeleri Ã¶nlenir  
+âœ… **30s Cooldown:** NodeMCU aynÄ± komutu tekrar gÃ¶ndermez  
+âœ… **Optimal Durum Tespiti:** Ä°deal koÅŸullarda sistemler kapatÄ±lÄ±r  
+âœ… **WiFi Sleep Mode:** NodeMCU idle durumda gÃ¼Ã§ tasarrufu (gelecek Ã¶zellik)
 
----
-
-## 📁 Dosya Yapısı (Modüler Mimari)
+## ğŸ“ Dosya YapÄ±sÄ± (ModÃ¼ler Mimari)
 
 ```
 Tarhun Bitirme Projesi/
-│
-├── platformio.ini              # PlatformIO konfigürasyonu
-├── README.md                   # Proje açıklaması
-├── kosullar.md                 # Kontrol koşulları (Sera + Sulama kodları)
-├── sistem_tasarimi.md          # Sistem tasarım dokümantasyonu (Kalman filtresi)
-├── YerIstasyonu_Alici.ino     # Alıcı kodu (Arduino IDE)
-│
-├── src/                        # Kaynak kodlar (Implementation)
-│   ├── main.cpp                # Ana verici program kodu
-│   ├── Sensors.cpp             # Sensör okuma + Kalman filtreleme
-│   ├── Calculations.cpp        # Bilimsel hesaplamalar
-│   ├── KalmanFilter.cpp        # 1D Kalman filtresi algoritması
-│   └── Communication.cpp       # Seri port + LoRa iletişimi
-│
-├── include/                    # Header dosyaları (Interface)
-│   ├── Sensors.h               # Sensör modülü arayüzü
-│   ├── Calculations.h          # Hesaplamalar arayüzü
-│   ├── KalmanFilter.h          # Kalman filtresi arayüzü
-│   ├── Communication.h         # İletişim arayüzü
-│   └── README                  # Header dosyaları açıklaması
-│
-└── lib/                        # Kütüphaneler
-    ├── Communication/          # Communication modülü alternatif konumu
-    │   ├── Communication.h
-    │   └── Communication.cpp
-    └── README                  # Kütüphane açıklaması
+â”‚
+â”œâ”€â”€ platformio.ini                # PlatformIO konfigÃ¼rasyonu
+â”œâ”€â”€ README.md                     # Proje aÃ§Ä±klamasÄ±
+â”œâ”€â”€ kosullar.md                   # Kontrol koÅŸullarÄ± (NodeMCU karar aÄŸacÄ± kodlarÄ±)
+â”œâ”€â”€ sistem_tasarimi.md            # Sistem tasarÄ±m dokÃ¼mantasyonu (gÃ¼ncel)
+â”œâ”€â”€ NODEMCU_KARAR_AGACI_README.md # NodeMCU karar aÄŸacÄ± detaylÄ± dokÃ¼mantasyonu
+â”‚
+â”œâ”€â”€ NodeMCU_Receiver.ino          # NodeMCU karar aÄŸacÄ± kodu (Arduino IDE)
+â”œâ”€â”€ YerIstasyonu_Alici.ino        # LoRa alÄ±cÄ± kodu (Arduino IDE)
+â”‚
+â”œâ”€â”€ src/                          # Arduino Mega kaynak kodlar (SensÃ¶r KatmanÄ±)
+â”‚   â”œâ”€â”€ main.cpp                  # Ana program (sensÃ¶r okuma + JSON gÃ¶nderim)
+â”‚   â”œâ”€â”€ Sensors.cpp               # SensÃ¶r okuma + Kalman filtreleme
+â”‚   â”œâ”€â”€ Calculations.cpp          # Bilimsel hesaplamalar
+â”‚   â”œâ”€â”€ KalmanFilter.cpp          # 1D Kalman filtresi algoritmasÄ±
+â”‚   â”œâ”€â”€ Communication.cpp         # LoRa iletiÅŸimi
+â”‚   â”œâ”€â”€ JSONFormatter.cpp         # Compact JSON oluÅŸturma (UART2)
+â”‚   â””â”€â”€ SerialCommands.cpp        # UART komut iÅŸleme (NodeMCU'dan gelen)
+â”‚
+â”œâ”€â”€ include/                      # Header dosyalarÄ± (Interface)
+â”‚   â”œâ”€â”€ Sensors.h                 # SensÃ¶r modÃ¼lÃ¼ arayÃ¼zÃ¼
+â”‚   â”œâ”€â”€ Calculations.h            # Hesaplamalar arayÃ¼zÃ¼
+â”‚   â”œâ”€â”€ KalmanFilter.h            # Kalman filtresi arayÃ¼zÃ¼
+â”‚   â”œâ”€â”€ Communication.h           # LoRa iletiÅŸim arayÃ¼zÃ¼
+â”‚   â”œâ”€â”€ JSONFormatter.h           # JSON formatter arayÃ¼zÃ¼
+â”‚   â””â”€â”€ SerialCommands.h          # Komut iÅŸleme arayÃ¼zÃ¼
+â”‚
+â””â”€â”€ lib/                          # KÃ¼tÃ¼phaneler
+    â””â”€â”€ README                    # KÃ¼tÃ¼phane aÃ§Ä±klamasÄ±
 ```
 
-### Modül Detayları
+### ModÃ¼l DetaylarÄ± - Arduino Mega (SensÃ¶r KatmanÄ±)
 
-#### 1. Sensors Modülü (371 satır)
-- **Amaç:** Tüm sensör okuma işlemlerini merkezileştirir
-- **Özellikler:**
-  - Her sensör için ayrı okuma fonksiyonu
-  - 7 adet KalmanFilter nesnesi (temperature, humidity, pressure, gas, lux, co2, soil)
-  - RAW ve FILTERED değerleri aynı anda tutar
-  - Serial çıktısında karşılaştırmalı gösterim
-- **Kullanım:**
-  ```cpp
-  Sensors sensors;
-  sensors.begin();
-  sensors.readAllSensors();  // Tüm sensörleri oku ve filtrele
-  float temp = readings.temperature_filtered;  // Filtrelenmiş sıcaklık
-  float temp_raw = readings.temperature_raw;   // Ham sıcaklık
-  ```
+#### 1. main.cpp (Pasif Veri Toplama)
+- **AmaÃ§:** SensÃ¶r okuma, JSON gÃ¶nderme, komut iÅŸleme
+- **Ana DÃ¶ngÃ¼:**
+  - Her 5 saniyede sensÃ¶r okuma (Kalman filtreli)
+  - JSON formatla ve Serial2'ye gÃ¶nder (NodeMCU)
+  - LoRa broadcast yap (Yer Ä°stasyonu)
+  - USB Serial debug Ã§Ä±ktÄ±sÄ± (PC)
+  - UART2'den gelen komutlarÄ± iÅŸle (NodeMCU â†’ Arduino)
+- **Otomatik Kontrol:** YOK (kaldÄ±rÄ±ldÄ±)
+- **Manuel Kontrol:** UART2 + USB Serial komutlarÄ±
 
-#### 2. KalmanFilter Modülü (60 satır)
-- **Amaç:** 1D Kalman filtresi ile sensör gürültüsü azaltma
-- **Özellikler:**
-  - Hafif ve hızlı algoritma (Arduino için optimize)
-  - Her sensör için ayrı parametre ayarı
-  - Otomatik başlatma (ilk ölçüm ile)
-- **Kullanım:**
-  ```cpp
-  KalmanFilter kf(0.001, 0.5);  // q=0.001, r=0.5
-  float filtered = kf.update(raw_measurement);
-  ```
+#### 2. Sensors.cpp (Kalman Filtreli Okuma)
+- **AmaÃ§:** 7 sensÃ¶rÃ¼ Kalman filtresi ile oku
+- **SensÃ¶rler:** BH1750, BME680, MH-Z14A, Soil Moisture
+- **Ã‡Ä±ktÄ±:** RAW ve FILTERED deÄŸerler
+- **Kalman Parametreleri:** Her sensÃ¶r iÃ§in optimize edilmiÅŸ
 
-#### 3. Calculations Modülü (84 satır)
-- **Amaç:** Bilimsel hesaplamaları kodun geri kalanından ayırır
-- **Özellikler:**
-  - Tüm fonksiyonlar static (nesne gerektirmez)
-  - Doğrulanmış formüller (Magnus, Rothfusz, İdeal Gaz)
-  - SI ve imperial birim dönüşümleri
-- **Kullanım:**
-  ```cpp
-  float dew = Calculations::calculateDewPoint(temp, humidity);
-  float hi = Calculations::calculateHeatIndex(temp, humidity);
-  ```
+#### 3. JSONFormatter.cpp (Compact JSON)
+- **AmaÃ§:** SensÃ¶r verilerini NodeMCU iÃ§in JSON formatla
+- **Format:** `{"temp":25.14,"hum":59.36,...}`
+- **Boyut:** ~250 byte (kompakt)
+- **Frekans:** 5 saniye
 
-#### 4. Communication Modülü (var olan, yeniden kullanıldı)
-- **Amaç:** Seri port ve LoRa iletişimi
-- **Özellikler:**
-  - Binary paket gönderimi
-  - CRC-16 hesaplama
-  - HEX dump debug çıktısı
-- **Kullanım:**
-  ```cpp
-  Communication::sendLoRaPacket(packet, sizeof(packet));
-  uint16_t crc = Communication::calculateCRC16(data, len);
-  ```
+#### 4. SerialCommands.cpp (Komut Ä°ÅŸleme)
+- **AmaÃ§:** NodeMCU'dan gelen komutlarÄ± iÅŸle
+- **Komutlar:** havaac, havakapa, isikac, isikkapa, sulaac, sulakapa
+- **GÃ¼venlik:** Sulama sÄ±rasÄ±nda diÄŸer sistemleri kapat
+
+### NodeMCU ESP8266 (Karar KatmanÄ±)
+
+#### NodeMCU_Receiver.ino (AkÄ±llÄ± Kontrol Sistemi - ~600 satÄ±r)
+- **AmaÃ§:** JSON parsing + karar aÄŸacÄ± + komut gÃ¶nderme + web server
+- **Ana Fonksiyonlar:**
+  - `loop()` - Ana dÃ¶ngÃ¼ (web server + JSON okuma + karar algoritmasÄ±)
+  - `parseSensorData()` - Manuel JSON parsing (ArduinoJson kullanmadan)
+  - `makeDecision()` - 17 kodlu karar aÄŸacÄ± (KOD-1 ~ KOD-9, SULAMA-1 ~ SULAMA-8)
+  - `sendCommandSafe()` - 30 saniye cooldown ile komut gÃ¶nder
+  - `handleRoot()` - Web kontrol paneli
+  - `handleCommand()` - Web komut iÅŸleme
+  - `handleStatus()` - Durum sorgulama API
+
+**Karar AÄŸacÄ± Mimarisi:**
+```cpp
+// Ã–ncelik seviyeleri
+1. KRÄ°TÄ°K (Donma, FÄ±rtÄ±na) - AnÄ±nda mÃ¼dahale
+2. YÃœKSEK (AÅŸÄ±rÄ± sÄ±cak+nem) - Ã–ncelikli
+3. NORMAL (HavalandÄ±rma, Ä±ÅŸÄ±k) - Rutin
+4. OPTIMAL (Enerji tasarrufu) - Ä°deal durum
+
+// Karar dÃ¶ngÃ¼sÃ¼
+JSON al â†’ Parse et â†’ Ã–ncelik belirle â†’ Komut gÃ¶nder â†’ Cooldown
+```
+
+**Web Kontrol Paneli:**
+- Real-time sensÃ¶r gÃ¶rÃ¼ntÃ¼leme (3s refresh)
+- 6 kontrol butonu (Hava, IÅŸÄ±k, Sulama)
+- Otomatik/Manuel toggle
+- IP, RSSI, Uptime bilgisi
+- Responsive mobil uyumlu tasarÄ±m
 
 ---
 
-## 📚 Kullanılan Kütüphaneler
+## ğŸ“š KullanÄ±lan KÃ¼tÃ¼phaneler
 
-### Verici Sistem (PlatformIO)
+### Arduino Mega - Verici Sistem (PlatformIO)
 ```ini
+[env:megaatmega2560]
+platform = atmelavr
+board = megaatmega2560
+framework = arduino
+
 lib_deps = 
-    claws/BH1750@^1.3.0
-    adafruit/Adafruit BME680 Library@^2.0.4
-    adafruit/Adafruit Unified Sensor@^1.1.14
-    xreef/EByte LoRa E32 library@^1.5.10
+    claws/BH1750@^1.3.0                           # BH1750 Ä±ÅŸÄ±k sensÃ¶rÃ¼
+    adafruit/Adafruit BME680 Library@^2.0.4      # BME680 hava kalitesi
+    adafruit/Adafruit Unified Sensor@^1.1.14     # Unified Sensor API
+    xreef/EByte LoRa E32 library@^1.5.10         # LoRa E220 modÃ¼lÃ¼
 ```
 
-### Alıcı Sistem (Arduino IDE)
-- **EByte LoRa E32 library** (Library Manager'dan kurulur)
+**Ã–zel KÃ¼tÃ¼phaneler:**
+- **KalmanFilter.cpp/h** - Proje iÃ§i geliÅŸtirilen 1D Kalman filtresi
+- **Sensors.cpp/h** - ModÃ¼ler sensÃ¶r okuma sistemi
+- **JSONFormatter.cpp/h** - Compact JSON oluÅŸturucu
+- **SerialCommands.cpp/h** - UART komut iÅŸleyici
+
+### NodeMCU ESP8266 (Arduino IDE)
+**Gerekli KÃ¼tÃ¼phaneler (Arduino Library Manager):**
+- `ESP8266WiFi` (Core ile gelir)
+- `ESP8266WebServer` (Core ile gelir)
+- `SoftwareSerial` (Core ile gelir)
+- `SD` (Core ile gelir)
+
+**ESP8266 Board Package:**
+```
+Board Manager URL: http://arduino.esp8266.com/stable/package_esp8266com_index.json
+Board: NodeMCU 1.0 (ESP-12E Module)
+CPU Frequency: 80 MHz
+Flash Size: 4M (3M SPIFFS)
+Upload Speed: 115200
+```
+
+**Harici KÃ¼tÃ¼phane Gerekmez:**
+- JSON parsing manuel olarak yapÄ±lÄ±r (ArduinoJson kullanÄ±lmaz)
+- TÃ¼m gerekli fonksiyonlar kodda mevcut
+
+### Yer Ä°stasyonu AlÄ±cÄ± (Arduino IDE)
+**Gerekli KÃ¼tÃ¼phaneler:**
+- `EByte LoRa E32 library` (Library Manager'dan)
 
 ---
 
-## 🚀 Kurulum ve Kullanım
+## ğŸš€ Kurulum ve KullanÄ±m
 
-### 1. Donanım Montajı
+### 1. DonanÄ±m MontajÄ±
 
-#### Verici Sistem (Sera İçi)
-1. Tüm sensörleri Arduino Mega'ya bağlayın
-2. LoRa E32 modülünü D10, D11, D6, D7 pinlerine bağlayın
-3. MG995 Servo motoru D9'a bağlayın (harici 5V güç)
-4. Fan rölesini D30'a bağlayın (Active LOW)
-5. Işık rölesini D7'ye bağlayın (Active LOW) - *LoRa M1 pin ile çakışma yok*
-6. Sulama rölesini D31'e bağlayın (Active LOW)
-7. Güç kaynağını bağlayın (5V 3A)
+#### Arduino Mega (SensÃ¶r KatmanÄ±)
+1. **SensÃ¶rler:**
+   - BH1750 â†’ I2C (SDA/SCL)
+   - BME680 â†’ I2C (SDA/SCL)
+   - MH-Z14A â†’ Serial3 (TX3/RX3)
+   - Soil Moisture â†’ A0
+2. **NodeMCU UART BaÄŸlantÄ±sÄ±:**
+   - Arduino TX2 (Pin 16) â†’ NodeMCU D1 (RX)
+   - Arduino RX2 (Pin 17) â†’ NodeMCU D2 (TX)
+   - GND â†’ GND (ortak topraklama)
+3. **AktÃ¼atÃ¶rler:**
+   - Servo motor â†’ D9 (harici 5V gÃ¼Ã§)
+   - Fan rÃ¶lesi â†’ D30 (Active LOW)
+   - IÅŸÄ±k rÃ¶lesi â†’ D29 (Active LOW)
+   - Pompa rÃ¶lesi â†’ D31 (Active LOW)
+4. **LoRa ModÃ¼lÃ¼:**
+   - E220-900T22D â†’ Serial1 (TX1/RX1)
+   - M0 â†’ D6, M1 â†’ D7, AUX â†’ D10
+5. **GÃ¼Ã§:** 5V 3A adaptÃ¶r
 
-#### Alıcı Sistem (Yer İstasyonu)
-1. Arduino'ya LoRa E32 modülünü bağlayın (aynı pin konfigürasyonu)
-2. USB ile bilgisayara bağlayın
-3. Serial Monitor açın (9600 baud)
+#### NodeMCU ESP8266 (Karar KatmanÄ±)
+1. **Arduino UART BaÄŸlantÄ±sÄ±:**
+   - NodeMCU D1 (RX) â†’ Arduino TX2
+   - NodeMCU D2 (TX) â†’ Arduino RX2
+   - GND â†’ GND
+2. **SD Kart ModÃ¼lÃ¼ (Opsiyonel):**
+   - CS â†’ D8
+   - MOSI â†’ D7
+   - MISO â†’ D6
+   - SCK â†’ D5
+3. **WiFi:** AP adÄ±nÄ± ve ÅŸifresini kodda ayarlayÄ±n
+4. **GÃ¼Ã§:** 5V 1A adaptÃ¶r veya USB
 
-### 2. Yazılım Yükleme
+#### Yer Ä°stasyonu
+1. Arduino + LoRa E220 modÃ¼lÃ¼ (aynÄ± pin konfigÃ¼rasyonu)
+2. USB ile PC baÄŸlantÄ±sÄ±
+3. Serial Monitor (9600 baud)
 
-#### Verici Sistem
+### 2. YazÄ±lÄ±m YÃ¼kleme
+
+#### Arduino Mega (PlatformIO)
 ```bash
-# PlatformIO ile
-cd "I:\Drive'ım\Bitirme Tezi\Tarhun Bitirme Projesi"
+cd "I:\Drive'Ä±m\Bitirme Tezi\CODÄ°NG\Tarhun Bitirme Projesi"
 pio run --target upload
 ```
 
-#### Alıcı Sistem
-1. Arduino IDE'yi açın
-2. `YerIstasyonu_Alici.ino` dosyasını açın
-3. Library Manager'dan "EByte LoRa E32" kütüphanesini kurun
-4. Board ve Port seçin
-5. Upload butonuna tıklayın
+#### NodeMCU ESP8266 (Arduino IDE)
+1. Arduino IDE â†’ Board Manager â†’ ESP8266 kurulumu
+2. `NodeMCU_Receiver.ino` dosyasÄ±nÄ± aÃ§
+3. **WiFi ayarlarÄ± dÃ¼zenle:**
+   ```cpp
+   const char* ssid = "SeraKontrol";
+   const char* password = "12345678";
+   ```
+4. Board: NodeMCU 1.0, Upload Speed: 115200
+5. Upload
 
-### 3. İlk Çalıştırma
+#### Yer Ä°stasyonu (Arduino IDE)
+1. `YerIstasyonu_Alici.ino` dosyasÄ±nÄ± aÃ§
+2. EByte LoRa E32 kÃ¼tÃ¼phanesini kur
+3. Upload
 
-#### Verici
-1. Seri monitörü açın (115200 baud)
-2. MH-Z14A sensörünün 3 dakika ısınmasını bekleyin
-3. Sensör değerlerini ve LoRa gönderimlerini gözlemleyin
-4. Sistem otomatik kontrole başlayacak
-5. **Manuel Kontrol:** Seri monitörden komut gönderin:
-   - `1` → Kapak aç + Fan aç
-   - `-1` → Kapak kapat + Fan kapat
-   - `2` → Işık aç
-   - `-2` → Işık kapat
-   - `3` → Sulama aç
-   - `-3` → Sulama kapat
+### 3. Ä°lk Ã‡alÄ±ÅŸtÄ±rma
 
-#### Alıcı
-1. Serial Monitor açın (9600 baud)
-2. LoRa paketlerinin geldiğini gözlemleyin
-3. Detaylı sensör verilerini ve analizleri görün
-4. İstatistikleri takip edin
+#### Arduino Mega
+1. USB Serial Monitor aÃ§ (115200 baud)
+2. MH-Z14A 3 dakika Ä±sÄ±nma bekle
+3. **RAW vs FILTERED** deÄŸerleri karÅŸÄ±laÅŸtÄ±r
+4. JSON Ã§Ä±ktÄ±sÄ±nÄ± kontrol et (Serial2'ye gidiyor)
+5. LoRa broadcast'i gÃ¶zlemle
 
-### 4. Kalibrasyon
-- **Toprak Nem Sensörü:**
-  - Kuru değer: Sensörü havada tutun, değeri kaydedin
-  - Islak değer: Sensörü suya batırın, değeri kaydedin
-  - `main.cpp` içinde `SOIL_DRY_VALUE` ve `SOIL_WET_VALUE` güncelleyin
+**Beklenen Ã‡Ä±ktÄ±:**
+```
+--- New Reading ---
+--- GY-30 (BH1750) Light Sensor ---
+Light Level: 475.00 lux (RAW) | 474.85 lux (FILTERED)
 
-- **LoRa Menzil:**
-  - İlk testlerde 10-20 metre mesafede deneyin
-  - Sinyal kalitesini CRC başarı oranından takip edin
-  - İdeal koşullarda 3 km'ye kadar çıkabilir
+{"temp":25.14,"hum":59.36,"pres":994.74,...}
+```
 
----
+#### NodeMCU
+1. USB Serial Monitor aÃ§ (115200 baud)
+2. WiFi baÄŸlantÄ±sÄ±nÄ± kontrol et
+3. IP adresini not al (`http://192.168.x.x`)
+4. Arduino'dan gelen JSON verisini gÃ¶zlemle
+5. Karar aÄŸacÄ± Ã§Ä±ktÄ±larÄ±nÄ± izle
 
-## 🔍 Test ve Doğrulama
+**Beklenen Ã‡Ä±ktÄ±:**
+```
+WiFi connected: 192.168.1.100
+JSON received: {"temp":25.14,"hum":59.36,...}
+[Karar] KOD-5: Hafif havalandÄ±rma (Temp: 25.14C)
+Komut gÃ¶nderildi: havaac
+```
 
-### Sensör Testleri
-1. **BH1750:** El feneri ile ışık değişimi gözleyin
-2. **BME680:** Çakmak ile sıcaklık/gaz direnci test edin
-3. **MH-Z14A:** Nefes vererek CO2 artışını test edin
-4. **Soil Sensor:** Kuru/ıslak toprakta test edin
+#### Web Kontrol Paneli
+1. TarayÄ±cÄ±da `http://192.168.x.x` aÃ§
+2. SensÃ¶r verilerini gÃ¶rÃ¼ntÃ¼le (3s refresh)
+3. **Manuel Mod:** Otomatik kontrolÃ¼ kapat
+4. Butonlarla komut gÃ¶nder:
+   - `Hava AÃ§/Kapat` â†’ Kapak + Fan
+   - `IÅŸÄ±k AÃ§/Kapat` â†’ LED/Lamba
+   - `Sulama AÃ§/Kapat` â†’ Pompa
+5. **Otomatik Mod:** Toggle ile karar aÄŸacÄ±nÄ± aktifleÅŸtir
 
-### Kontrol Testleri
-1. **Sera Kapak (Manuel):** 
-   - Komut `havaac` → Servo 0° (açık), Fan AÇIK
-   - Komut `havakapa` → Servo 95° (kapalı), Fan KAPALI
-   - Servo titreme olmadan hareket etmeli
-   
-2. **Sera Kapak (Otomatik):** 
-   - Sıcaklık değişimlerinde kapak hareketini gözleyin
-   
-3. **Aydınlatma (Manuel):**
-   - Komut `isikac` → D7 röle AÇIK
-   - Komut `isikkapa` → D7 röle KAPALI
-   
-4. **Sulama Güvenlik Testi (Manuel):**
-   - Test senaryosu:
-     1. `havaac` ile kapağı ve fanı aç
-     2. `isikac` ile ışığı aç
-     3. `sulaac` komutu gönder
-     4. **Kontrol:** Kapak kapanmalı, fan kapanmalı, ışık kapanmalı, sulama başlamalı
-     5. `sulakapa` komutu gönder
-     6. **Kontrol:** Sulama kapanmalı, tüm sistemler önceki durumuna (açık) dönmeli
-   - ✅ Beklenen: Sistemler kaydedilen durumuna geri dönmeli
-   
-5. **Sulama (Otomatik):**
-   - Toprak nem seviyesini değiştirerek pompayı test edin
+### 4. Manuel Kontrol
 
-### LoRa İletişim Testleri
-1. **Yakın Mesafe (1-5m):**
-   - CRC başarı oranı: >99%
-   - Her paket ulaşmalı
-   
-2. **Orta Mesafe (10-50m):**
-   - CRC başarı oranı: >95%
-   - Ara sıra paket kayıpları normal
-   
-3. **Uzak Mesafe (100-500m):**
-   - CRC başarı oranı: >90%
-   - Engellere dikkat
-   
-4. **Hata Kontrolü:**
-   - Bozuk paketler CRC ile otomatik tespit edilir
-   - Yer istasyonunda istatistikler takip edilir
-   
-5. **Sinyal Kalitesi İyileştirme:**
-   - Antenleri dik konumda tutun
-   - Metal engellerden uzak durun
-   - Yüksekliği artırın
-   - Açık alan kullanın
+#### USB Serial (Arduino)
+```
+havaac     â†’ Kapak aÃ§ + Fan Ã§alÄ±ÅŸtÄ±r
+havakapa   â†’ Kapak kapat + Fan durdur
+isikac     â†’ IÅŸÄ±k aÃ§
+isikkapa   â†’ IÅŸÄ±k kapat
+sulaac     â†’ Sulama aÃ§
+sulakapa   â†’ Sulama kapat
+```
 
----
+#### Web Paneli (NodeMCU)
+```
+http://192.168.x.x/command?cmd=havaac
+http://192.168.x.x/command?cmd=sulaac
+http://192.168.x.x/command?cmd=toggleauto
+```
 
-## 🛡️ Güvenlik Özellikleri
+### 5. Kalibrasyon
 
-1. **Kalman Filtresi:** Sensör gürültülerini azaltarak yanlış kararları önler
-2. **Histerezis:** 30 saniye minimum hareket aralığı (titreme önleme)
-3. **Servo Titreme Önleme:** Attach/detach pattern (PWM sinyali sadece hareket anında aktif)
-4. **Sulama Güvenlik Sistemi:** 
-   - Sulama başladığında tüm elektrikli sistemler otomatik kapatılır
-   - Sulama bittiğinde sistemler önceki durumuna otomatik geri döner
-   - Su-elektrik teması riski minimize edilir
-5. **Durum Kaydetme/Geri Yükleme:** Manuel sulama komutlarında state management
-6. **Timeout:** MH-Z14A 3 dakika ısınma süresi
-7. **Sınır Kontrolü:** Tüm değerler min/max kontrollü
-8. **Aşırı Sulama Koruması:** 90% üstü nemde sulama kilidi
-9. **Donma Koruması:** 10°C altında kapak otomatik kapanır
-10. **Non-Blocking Loop:** millis() tabanlı zamanlama (seri komutlar kesintisiz işlenir)
-11. **Komut Doğrulama:** Sözel komutlar ile yanlış tetikleme önlenir
-12. **Veri Bütünlüğü:** CRC-16 ile LoRa paketleri doğrulanır
+**Toprak Nem SensÃ¶rÃ¼:**
+```cpp
+// main.cpp iÃ§inde
+#define SOIL_DRY_VALUE 800    // Havada Ã¶lÃ§Ã¼len ADC
+#define SOIL_WET_VALUE 300    // Suda Ã¶lÃ§Ã¼len ADC
+```
+
+**Kalman Filtresi (Gerekirse):**
+```cpp
+// Sensors.cpp iÃ§inde
+tempFilter.setProcessNoise(0.001);     // Daha hÄ±zlÄ± deÄŸiÅŸim iÃ§in artÄ±r
+tempFilter.setMeasurementNoise(0.5);   // SensÃ¶re gÃ¼ven dÃ¼ÅŸÃ¼kse artÄ±r
+```
+
+**NodeMCU Karar EÅŸikleri:**
+```cpp
+// NodeMCU_Receiver.ino iÃ§inde
+// KOD-1: Donma riski
+if (temp < 10.0 || dewPoint < 5.0) { ... }
+
+// EÅŸikleri whiteboard fotoÄŸraflarÄ±ndan ayarlayÄ±n
+```
 
 ---
 
-## 📊 Performans Metrikleri
+## ğŸ” Test ve DoÄŸrulama
 
-### Verici Sistem
-- **Veri Okuma Frekansı:** 5 saniye
-- **Kalman Filtresi İşlem Süresi:** <5ms (7 sensör için)
-- **Karar Alma Süresi:** <100ms
-- **Servo Yanıt Süresi:** ~500ms
-- **Röle Yanıt Süresi:** <50ms
-- **LoRa Gönderim Süresi:** ~100ms
-- **Sensör Doğruluğu (Filtrelenmiş):**
-  - Sıcaklık: ±0.3°C (Ham: ±1°C)
-  - Nem: ±1% (Ham: ±3%)
-  - CO2: ±20ppm (Ham: ±50ppm)
-  - Işık: ±10% (Ham: ±20%)
-  - Toprak Nem: ±2% (Ham: ±5%)
+### SensÃ¶r Testleri
+1. **BH1750:** El feneri ile Ä±ÅŸÄ±k deÄŸiÅŸimi â†’ RAW vs FILTERED karÅŸÄ±laÅŸtÄ±r
+2. **BME680:** Ã‡akmak ile sÄ±caklÄ±k/gaz direnci â†’ Kalman yumuÅŸatmasÄ± gÃ¶zle
+3. **MH-Z14A:** Nefes vererek CO2 artÄ±ÅŸÄ± â†’ 3 dakika Ä±sÄ±nma kontrolÃ¼
+4. **Soil Sensor:** Kuru/Ä±slak toprak â†’ Kalibrasyon doÄŸrula
 
-### Alıcı Sistem
-- **Paket Alma Süresi:** <50ms
-- **CRC Doğrulama:** <10ms
-- **Veri İşleme:** <100ms
-- **Serial Çıktı:** <500ms
-- **Başarı Oranı:** >95% (ideal koşullar)
+### Ä°letiÅŸim Testleri
 
-### LoRa İletişim
-- **Bant Genişliği:** 125 kHz
+#### UART2 (Arduino â†” NodeMCU)
+```python
+# NodeMCU Serial Monitor Ã§Ä±ktÄ±sÄ±
+JSON received: {"temp":25.14,"hum":59.36,"pres":994.74,...}
+Parsed: temp=25.14, hum=59.36, co2=450
+
+# Arduino Serial Monitor Ã§Ä±ktÄ±sÄ±
+[Serial2] JSON sent to NodeMCU
+[Serial2] Command received: havaac
+```
+
+**Test:**
+1. Arduino JSON gÃ¶nderimi â†’ NodeMCU parse etmeli
+2. NodeMCU komut gÃ¶nderimi â†’ Arduino iÅŸlemeli
+3. Cooldown mekanizmasÄ± â†’ 30s iÃ§inde aynÄ± komut tekrar gÃ¶nderilmemeli
+
+#### LoRa (Arduino â†’ Yer Ä°stasyonu)
+**Mesafe Testleri:**
+- 1-5m: CRC baÅŸarÄ± >99%
+- 10-50m: CRC baÅŸarÄ± >95%
+- 100-500m: CRC baÅŸarÄ± >90%
+
+**Hata KontrolÃ¼:**
+```
+[LORA] Paket gÃ¶nderildi (54 byte, CRC: 0x1A2B)
+[YER] Paket alÄ±ndÄ± (CRC OK) - BaÅŸarÄ±: 66/68 (97.1%)
+```
+
+### Kontrol Sistemi Testleri
+
+#### 1. Manuel Kontrol (NodeMCU Web)
+```
+Test 1: Hava aÃ§ â†’ Servo 0Â°, Fan ON, JSON roof:0, fan:true
+Test 2: Hava kapat â†’ Servo 95Â°, Fan OFF, JSON roof:100, fan:false
+Test 3: IÅŸÄ±k aÃ§ â†’ RÃ¶le ON, JSON light:true
+Test 4: Sulama aÃ§ â†’ Pompa ON, diÄŸer sistemler OFF (gÃ¼venlik)
+```
+
+#### 2. Otomatik Karar AÄŸacÄ±
+```
+Senaryo 1: Temp < 10Â°C â†’ KOD-1 Donma â†’ havakapa + sulakapa
+Senaryo 2: Temp > 32Â°C, Hum > 70% â†’ KOD-2 â†’ havaac
+Senaryo 3: Soil < 20%, Temp > 28Â°C â†’ SULAMA-1 â†’ sulaac
+Senaryo 4: 20Â°C â‰¤ Temp â‰¤ 26Â°C â†’ KOD-9 Optimal â†’ Enerji tasarrufu
+```
+
+#### 3. Cooldown Testi
+```python
+# NodeMCU Serial Monitor
+[10:00:00] Komut: havaac gÃ¶nderildi
+[10:00:15] Komut: havaac â†’ COOLDOWN (15s geÃ§ti, 30s bekleniyor)
+[10:00:30] Komut: havaac gÃ¶nderildi (30s geÃ§ti, OK)
+```
+
+#### 4. Sulama GÃ¼venlik Testi
+```
+BaÅŸlangÄ±Ã§: Fan=ON, Light=ON, Roof=50%
+sulaac komutu â†’ Fan=OFF, Light=OFF, Roof=100%, Pump=ON
+sulakapa komutu â†’ Fan=ON, Light=ON, Roof=50%, Pump=OFF (geri yÃ¼kleme)
+```
+
+### Performans Metrikleri
+- **SensÃ¶r Okuma:** 5 saniye periyot
+- **JSON Ä°letimi:** ~250 byte/5s
+- **LoRa Ä°letimi:** 54 byte/5s
+- **Karar AlgoritmasÄ±:** 10 saniye periyot
+- **Web Refresh:** 3 saniye
+- **RAM KullanÄ±mÄ±:** Arduino %34.6 (2836/8192 byte)
+- **Flash KullanÄ±mÄ±:** Arduino %16.6 (42160/253952 byte)
+
+## ğŸ›¡ï¸ GÃ¼venlik Ã–zellikleri
+
+### Arduino Mega (SensÃ¶r KatmanÄ±)
+1. **Kalman Filtresi:** SensÃ¶r gÃ¼rÃ¼ltÃ¼sÃ¼ azaltarak yanlÄ±ÅŸ okumalarÄ± Ã¶nler
+2. **Servo Titreme Ã–nleme:** Attach/detach pattern (PWM sadece harekette aktif)
+3. **Sulama GÃ¼venlik Sistemi:** 
+   - Sulama sÄ±rasÄ±nda tÃ¼m elektrikli sistemler otomatik kapatÄ±lÄ±r
+   - Sulama bittiÄŸinde sistemler Ã¶nceki durumuna geri dÃ¶ner
+   - Su-elektrik temasÄ± riski minimize edilir
+4. **MH-Z14A Timeout:** 3 dakika Ä±sÄ±nma kontrolÃ¼ (sahte okumalar Ã¶nlenir)
+5. **SÄ±nÄ±r KontrolÃ¼:** ADC deÄŸerleri 0-1023 arasÄ± kontrollÃ¼
+6. **Non-Blocking Loop:** millis() tabanlÄ± zamanlama (seri komutlar kesintisiz)
+7. **CRC-16 Veri DoÄŸrulama:** LoRa paketleri bÃ¼tÃ¼nlÃ¼k kontrolÃ¼ ile gÃ¶nderilir
+
+### NodeMCU (Karar KatmanÄ±)
+1. **Cooldown MekanizmasÄ±:** 30 saniye iÃ§inde aynÄ± komut tekrar gÃ¶nderilmez
+2. **JSON Parsing Hata ToleransÄ±:** Parse hatalarÄ±nda eski deÄŸerler kullanÄ±lÄ±r
+3. **Timeout KorumasÄ±:** 60 saniye boyunca veri gelmezse karar aÄŸacÄ± durur
+4. **Ã–ncelik Sistemi:** Kritik durumlar (donma, fÄ±rtÄ±na) Ã¶ncelikle iÅŸlenir
+5. **Donma KorumasÄ±:** Temp < 10Â°C â†’ Kapak + Sulama otomatik kapatÄ±lÄ±r
+6. **FÄ±rtÄ±na KorumasÄ±:** BasÄ±nÃ§ < 985 hPa â†’ Acil kapanÄ±ÅŸ
+7. **AÅŸÄ±rÄ± Sulama Ã–nleme:** Soil > 80% â†’ Sulama kilidi
+8. **Web Server GÃ¼venlik:** GET istekleri ile komut doÄŸrulama
+9. **WiFi Auto Reconnect:** BaÄŸlantÄ± kaybÄ±nda otomatik yeniden baÄŸlanma
+10. **SD Card Loglama:** Veri kaybÄ± Ã¶nleme (isteÄŸe baÄŸlÄ±)
+
+### Sistem Geneli
+1. **Dual-Layer Architecture:** Arduino arÄ±zasÄ±nda NodeMCU Ã§alÄ±ÅŸÄ±r, NodeMCU arÄ±zasÄ±nda Arduino sensÃ¶r okumaya devam eder
+2. **UART2 Hata ToleransÄ±:** BaÄŸlantÄ± kesilirse her iki cihaz da baÄŸÄ±msÄ±z Ã§alÄ±ÅŸÄ±r
+3. **Manuel Override:** Her iki sistemde de USB/Serial manuel kontrol imkanÄ±
+4. **State Recovery:** GÃ¼Ã§ kesintisi sonrasÄ± sistemler gÃ¼venli duruma dÃ¶ner
+5. **Veri Yedekleme:** LoRa ile Yer Ä°stasyonuna paralel yedekleme
+
+---
+
+## ğŸ“Š Performans Metrikleri
+
+### Arduino Mega (SensÃ¶r KatmanÄ±)
+- **SensÃ¶r Okuma FrekansÄ±:** 5 saniye
+- **Kalman Filtresi Ä°ÅŸlem SÃ¼resi:** <5ms (7 sensÃ¶r)
+- **JSON OluÅŸturma:** <20ms (~250 byte)
+- **LoRa GÃ¶nderim:** ~100ms (54 byte binary)
+- **Servo YanÄ±t SÃ¼resi:** ~500ms (0-95Â° hareket)
+- **RÃ¶le YanÄ±t SÃ¼resi:** <50ms
+- **RAM KullanÄ±mÄ±:** 2836/8192 byte (34.6%)
+- **Flash KullanÄ±mÄ±:** 42160/253952 byte (16.6%)
+- **SensÃ¶r DoÄŸruluÄŸu (FiltrelenmiÅŸ):**
+  - SÄ±caklÄ±k: Â±0.3Â°C (Ham: Â±1Â°C)
+  - Nem: Â±1% (Ham: Â±3%)
+  - CO2: Â±20ppm (Ham: Â±50ppm)
+  - Toprak Nem: Â±2% (Ham: Â±5%)
+
+### NodeMCU ESP8266 (Karar KatmanÄ±)
+- **JSON Parsing SÃ¼resi:** <50ms (manuel parsing)
+- **Karar AlgoritmasÄ± FrekansÄ±:** 10 saniye
+- **Karar Ä°ÅŸlem SÃ¼resi:** <100ms (17 kod kontrolÃ¼)
+- **Komut GÃ¶nderim:** <10ms (UART2 TX)
+- **Web Server YanÄ±t:** ~200ms (GET request)
+- **WiFi Latency:** <50ms (local network)
+- **RAM KullanÄ±mÄ±:** ~40KB/80KB (50%)
+- **Flash KullanÄ±mÄ±:** ~300KB/4MB (7.5%)
+- **GÃ¼venilirlik:**
+  - JSON Parse BaÅŸarÄ±: >99.9%
+  - Cooldown EtkinliÄŸi: %100
+  - Karar DoÄŸruluÄŸu: EÅŸik tabanlÄ± deterministik
+
+### LoRa Ä°letiÅŸim
+- **Paket Boyutu:** 54 byte (binary)
+- **GÃ¶nderim FrekansÄ±:** 5 saniye
+- **CRC BaÅŸarÄ± OranÄ±:**
+  - 1-5m: >99%
+  - 10-50m: >95%
+  - 100-500m: >90%
+- **Maksimum Menzil:** 3 km (aÃ§Ä±k alan, ideal koÅŸullar)
+- **Throughput:** 10.8 byte/s (dÃ¼ÅŸÃ¼k gÃ¼Ã§ tÃ¼ketimi iÃ§in optimize)
+
+### UART2 Ä°letiÅŸim
+- **Baud Rate:** 9600 bps
+- **JSON Paket:** ~250 byte (5 saniyede bir)
+- **Komut Boyutu:** ~10 byte (olay tabanlÄ±)
+- **Latency:** <10ms (kablolu baÄŸlantÄ±)
+- **Hata OranÄ±:** <0.01% (kablolu gÃ¼venilirlik)
+
+### Sistem Toplam
+- **Ana DÃ¶ngÃ¼ (Arduino):** ~200ms (5 saniye wait)
+- **Ana DÃ¶ngÃ¼ (NodeMCU):** ~500ms (10 saniye karar)
+- **Toplam Veri AkÄ±ÅŸÄ±:** ~300 byte/5s (JSON + LoRa)
+- **GÃ¼Ã§ TÃ¼ketimi (Normal):** ~2.5W
+- **GÃ¼Ã§ TÃ¼ketimi (Peak):** ~6W (servo + pompa aktif)
+
+---
+  - IÅŸÄ±k: Â±10% (Ham: Â±20%)
+  - Toprak Nem: Â±2% (Ham: Â±5%)
+
+### AlÄ±cÄ± Sistem
+- **Paket Alma SÃ¼resi:** <50ms
+- **CRC DoÄŸrulama:** <10ms
+- **Veri Ä°ÅŸleme:** <100ms
+- **Serial Ã‡Ä±ktÄ±:** <500ms
+- **BaÅŸarÄ± OranÄ±:** >95% (ideal koÅŸullar)
+
+### LoRa Ä°letiÅŸim
+- **Bant GeniÅŸliÄŸi:** 125 kHz
 - **Paket Boyutu:** 54 byte (Kalman filtreli, optimize)
-- **Hava Süresi:** ~180ms/paket (v2.0: 200ms, %10 daha hızlı)
-- **Maksimum Veri Hızı:** ~5 paket/saniye
-- **Gerçek Kullanım:** 0.2 paket/saniye (5s aralık)
-- **Enerji Verimliliği:** Yüksek (duty cycle %3.6, v2.0: %4)
+- **Hava SÃ¼resi:** ~180ms/paket (v2.0: 200ms, %10 daha hÄ±zlÄ±)
+- **Maksimum Veri HÄ±zÄ±:** ~5 paket/saniye
+- **GerÃ§ek KullanÄ±m:** 0.2 paket/saniye (5s aralÄ±k)
+- **Enerji VerimliliÄŸi:** YÃ¼ksek (duty cycle %3.6, v2.0: %4)
 
-### Kalman Filtresi Performansı
-- **İşlem Süresi:** <1ms/sensör
-- **Bellek Kullanımı:** 28 byte/filtre (7 filtre = 196 byte)
-- **Gürültü Azaltma:** %60-80 (sensöre göre değişir)
-- **Gecikme:** 1-2 okuma döngüsü (5-10 saniye)
-- **Kararlılık:** 3-4 okuma sonrası optimal
+### Kalman Filtresi PerformansÄ±
+- **Ä°ÅŸlem SÃ¼resi:** <1ms/sensÃ¶r
+- **Bellek KullanÄ±mÄ±:** 28 byte/filtre (7 filtre = 196 byte)
+- **GÃ¼rÃ¼ltÃ¼ Azaltma:** %60-80 (sensÃ¶re gÃ¶re deÄŸiÅŸir)
+- **Gecikme:** 1-2 okuma dÃ¶ngÃ¼sÃ¼ (5-10 saniye)
+- **KararlÄ±lÄ±k:** 3-4 okuma sonrasÄ± optimal
 
 ---
 
-## 🔮 Gelecek Geliştirmeler
+## ğŸ”® Gelecek GeliÅŸtirmeler
 
-### Yakın Vadede (1-3 ay)
-1. **GSM/4G Modülü** - İnternet üzerinden uzaktan izleme
-2. **SD Kart** - Veri kaydetme ve log tutma (filtrelenmiş + ham veriler)
-3. **LCD Ekran** - Yerel veri görüntüleme (verici tarafta)
-4. **Adaptif Kalman Filtresi** - Parametreleri otomatik ayarlama
+### YakÄ±n Vadede (1-3 ay)
+1. **WiFi Sleep Mode** - NodeMCU enerji tasarrufu optimizasyonu
+2. **SD Kart Loglama** - NodeMCU'da geliÅŸmiÅŸ veri kaydetme (timestamp + JSON)
+3. **LCD Ekran** - Yerel veri gÃ¶rÃ¼ntÃ¼leme (Arduino Mega tarafta)
+4. **Adaptif Karar EÅŸikleri** - Mevsimsel otomatik ayarlama
+5. **MQTT ProtokolÃ¼** - IoT cloud platformu entegrasyonu
 
 ### Orta Vadede (3-6 ay)
-5. **Web Dashboard** - Grafiksel arayüz ve tarihsel veri analizi
-6. **Mobil Uygulama** - Akıllı telefon kontrolü ve bildirimler
-7. **Çoklu Bölge** - Farklı bitki türleri için bölgesel kontrol
-8. **Hava Durumu API** - Dış hava durumu ile entegrasyon
-9. **Kamera Modülü** - Bitki sağlığı görsel analizi
+6. **Web Dashboard v2.0** - Grafiksel arayÃ¼z ve tarihsel veri analizi
+7. **Mobil Uygulama** - iOS/Android kontrol ve bildirimler
+8. **Ã‡oklu BÃ¶lge KontrolÃ¼** - FarklÄ± bitki tÃ¼rleri iÃ§in baÄŸÄ±msÄ±z zonlar
+9. **Hava Durumu API** - DÄ±ÅŸ hava durumu ile entegrasyon (OpenWeatherMap)
+10. **ESP32-CAM ModÃ¼lÃ¼** - Bitki saÄŸlÄ±ÄŸÄ± gÃ¶rsel izleme
 
 ### Uzun Vadede (6-12 ay)
-10. **Yapay Zeka** - Makine öğrenmesi ile optimizasyon ve tahminleme
-11. **Güneş Paneli** - Enerji bağımsızlığı
-12. **LoRaWAN Gateway** - The Things Network entegrasyonu
-13. **Çoklu Alıcı** - Birden fazla yer istasyonu desteği
-14. **Predictive Maintenance** - Sensör arızalarını önceden tespit
-15. **Multi-Sensor Fusion** - Birden fazla sensörden optimal tahmin
+11. **Yapay Zeka Optimizasyonu** - Machine learning ile karar aÄŸacÄ± iyileÅŸtirme
+12. **GÃ¼neÅŸ Paneli + AkÃ¼** - Enerji baÄŸÄ±msÄ±zlÄ±ÄŸÄ±
+13. **LoRaWAN Gateway** - The Things Network entegrasyonu
+14. **Predictive Maintenance** - SensÃ¶r arÄ±zalarÄ±nÄ± Ã¶nceden tespit (Kalman drift analizi)
+15. **Multi-Sensor Fusion** - Birden fazla sensÃ¶rden optimal tahmin (Extended Kalman Filter)
+16. **Voice Control** - Google Assistant / Alexa entegrasyonu
 
 ---
 
-## 📞 Destek ve Katkı
+## ğŸ“ Destek ve KatkÄ±
 
-**Geliştirici:** Yusuf Islam Budak  
-**Proje:** Bitirme Tezi - Akıllı Tarım Sistemi  
+**GeliÅŸtirici:** Yusuf Islam Budak  
+**Proje:** Bitirme Tezi - AkÄ±llÄ± TarÄ±m Sistemi  
+**GitHub:** https://github.com/YusufIslamBudak/Bitirme-Projesi-Ak-ll-Tar-m-  
+**Ãœniversite:** [Ãœniversite AdÄ±]  
+**DanÄ±ÅŸman:** [DanÄ±ÅŸman AdÄ±]  
+**Tarih:** Ekim 2025 - KasÄ±m 2025
+
+**KatkÄ±da Bulunma:**
+- Fork yapÄ±n ve pull request gÃ¶nderin
+- Issue aÃ§arak hata bildirin veya Ã¶neride bulunun
+- DokÃ¼mantasyonu iyileÅŸtirin
+
+---
+
+## ğŸ“„ Lisans
+
+Bu proje bir bitirme tezi Ã§alÄ±ÅŸmasÄ±dÄ±r. Akademik amaÃ§lÄ± kullanÄ±m iÃ§in uygundur.
+
+---
+
+### Uzun Vadede (6-12 ay)
+10. **Yapay Zeka** - Makine Ã¶ÄŸrenmesi ile optimizasyon ve tahminleme
+11. **GÃ¼neÅŸ Paneli** - Enerji baÄŸÄ±msÄ±zlÄ±ÄŸÄ±
+12. **LoRaWAN Gateway** - The Things Network entegrasyonu
+13. **Ã‡oklu AlÄ±cÄ±** - Birden fazla yer istasyonu desteÄŸi
+14. **Predictive Maintenance** - SensÃ¶r arÄ±zalarÄ±nÄ± Ã¶nceden tespit
+15. **Multi-Sensor Fusion** - Birden fazla sensÃ¶rden optimal tahmin
+
+---
+
+## ğŸ“ Destek ve KatkÄ±
+
+**GeliÅŸtirici:** Yusuf Islam Budak  
+**Proje:** Bitirme Tezi - AkÄ±llÄ± TarÄ±m Sistemi  
 **GitHub:** https://github.com/YusufIslamBudak/Bitirme-Projesi-Ak-ll-Tar-m-  
 **Tarih:** Ekim 2025
 
 ---
 
-## 📄 Lisans
+## ğŸ“„ Lisans
 
-Bu proje bir bitirme tezi çalışmasıdır.
+Bu proje bir bitirme tezi Ã§alÄ±ÅŸmasÄ±dÄ±r.
 
 ---
 
-**Son Güncelleme:** 19 Kasım 2025
+**Son GÃ¼ncelleme:** 19 KasÄ±m 2025
 
-**Versiyon:** 3.0 - Modüler Mimari + Kalman Filtresi Entegrasyonu
+**Versiyon:** 3.0 - ModÃ¼ler Mimari + Kalman Filtresi Entegrasyonu
 
-### Versiyon Geçmişi
+### Versiyon GeÃ§miÅŸi
 
-**v3.0 (19 Kasım 2025)**
-- ✅ Modüler mimari: Sensors, Calculations, KalmanFilter, Communication modülleri
-- ✅ 1D Kalman filtresi entegrasyonu (7 sensör için ayrı parametreler)
-- ✅ RAW ve FILTERED değerlerin karşılaştırmalı gösterimi
-- ✅ LoRa paketlerinde sadece filtrelenmiş değerler gönderimi (54 byte)
-- ✅ Bilimsel hesaplamaların ayrı modüle taşınması
-- ✅ Kod organizasyonu ve bakım kolaylığı artırıldı
+**v3.0 (19 KasÄ±m 2025)**
+- âœ… ModÃ¼ler mimari: Sensors, Calculations, KalmanFilter, Communication modÃ¼lleri
+- âœ… 1D Kalman filtresi entegrasyonu (7 sensÃ¶r iÃ§in ayrÄ± parametreler)
+- âœ… RAW ve FILTERED deÄŸerlerin karÅŸÄ±laÅŸtÄ±rmalÄ± gÃ¶sterimi
+- âœ… LoRa paketlerinde sadece filtrelenmiÅŸ deÄŸerler gÃ¶nderimi (54 byte)
+- âœ… Bilimsel hesaplamalarÄ±n ayrÄ± modÃ¼le taÅŸÄ±nmasÄ±
+- âœ… Kod organizasyonu ve bakÄ±m kolaylÄ±ÄŸÄ± artÄ±rÄ±ldÄ±
 
 **v2.0 (27 Ekim 2025)**
-- ✅ LoRa E32 kablosuz iletişim entegrasyonu
-- ✅ Yer istasyonu alıcı sistemi
-- ✅ Binary paket transferi + CRC hata kontrolü
-- ✅ Sulama güvenlik sistemi (otomatik kapama/geri yükleme)
+- âœ… LoRa E32 kablosuz iletiÅŸim entegrasyonu
+- âœ… Yer istasyonu alÄ±cÄ± sistemi
+- âœ… Binary paket transferi + CRC hata kontrolÃ¼
+- âœ… Sulama gÃ¼venlik sistemi (otomatik kapama/geri yÃ¼kleme)
 
 **v1.0 (Ekim 2025)**
-- ✅ Temel sensör okuma (BH1750, BME680, MH-Z14A, Soil)
-- ✅ Otomatik/Manuel kontrol modları
-- ✅ Servo, röle kontrolleri
-- ✅ 9 sera kodu + 8 sulama kodu
+- âœ… Temel sensÃ¶r okuma (BH1750, BME680, MH-Z14A, Soil)
+- âœ… Otomatik/Manuel kontrol modlarÄ±
+- âœ… Servo, rÃ¶le kontrolleri
+- âœ… 9 sera kodu + 8 sulama kodu
+
