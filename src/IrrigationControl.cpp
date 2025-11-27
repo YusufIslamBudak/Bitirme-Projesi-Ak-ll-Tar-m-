@@ -20,10 +20,14 @@ extern int currentRoofPosition;
 extern void setRoofPosition(int position, String reason);
 
 // ========================================
-// SULAMA KONTROL FONKSIYONLARI
+// SULAMA KONTROL FONKSIYONLARI - OTOMATIK YONETIM DEVRE DISI
 // ========================================
 
+// NOT: Bu fonksiyonlar artik kullanilmiyor.
+// Sulama sadece UART komutlari ile manuel olarak kontrol ediliyor.
+
 // Sulama sistemini kontrol et
+/*
 void controlIrrigation() {
   // Pompa aciksa, sure kontrolu yap
   if (isPumpOn) {
@@ -54,8 +58,10 @@ void controlIrrigation() {
     irrigationLockoutUntil = millis() + IRRIGATION_LOCKOUT_TIME;
   }
 }
+*/
 
 // Sulama gereksinimi kontrolu
+/*
 bool checkIrrigationNeeded() {
   // Sensors modulunden filtrelenmis degerleri al
   SensorReadings& readings = sensors.getReadings();
@@ -145,8 +151,10 @@ bool checkIrrigationNeeded() {
   // Varsayilan: Sulama yapma
   return false;
 }
+*/
 
 // Pompa durumunu ayarla
+/*
 void setPumpState(bool state, int duration, String reason) {
   // Role kontrolu (role baglaninca yorum satirini kaldir)
   // digitalWrite(PUMP_RELAY_PIN, state ? HIGH : LOW);
@@ -191,3 +199,4 @@ void setPumpState(bool state, int duration, String reason) {
   }
   lastIrrigationReason = reason;
 }
+*/

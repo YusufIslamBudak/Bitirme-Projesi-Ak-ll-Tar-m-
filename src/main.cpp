@@ -196,8 +196,8 @@ void loop() {
     // Manuel kontrolde servo karismamasi icin devre disi
     // controlGreenhouse();
     
-    // Sulama kontrol
-    controlIrrigation();
+    // Sulama kontrol - OTOMATIK YONETIM DEVRE DISI
+    // controlIrrigation();
     
     // LoRa ile veri gonder (Communication modulu ile)
     sendLoRaData();

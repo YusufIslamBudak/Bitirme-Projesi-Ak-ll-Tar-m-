@@ -19,10 +19,14 @@ extern float calculateHeatIndex(float temp, float humidity);
 extern float calculateDewPoint(float temp, float humidity);
 
 // ========================================
-// SERA KONTROL FONKSIYONLARI
+// SERA KONTROL FONKSIYONLARI - OTOMATIK YONETIM DEVRE DISI
 // ========================================
 
+// NOT: Bu fonksiyonlar artik kullanilmiyor. 
+// Sera sadece UART komutlari ile manuel olarak kontrol ediliyor.
+
 // Sera kosullarini kontrol et ve karar ver
+/*
 void controlGreenhouse() {
   // Son hareketten beri yeterli zaman gecmis mi? (Titreme onleme)
   if (millis() - lastRoofAction < ROOF_ACTION_DELAY) {
@@ -37,8 +41,10 @@ void controlGreenhouse() {
     setRoofPosition(requiredPosition, lastRoofReason);
   }
 }
+*/
 
 // Sera kosullarini degerlendirip gerekli kapak pozisyonunu dondur
+/*
 int checkGreenhouseConditions() {
   float temp = bme.temperature;
   float humidity = bme.humidity;
@@ -123,8 +129,10 @@ int checkGreenhouseConditions() {
   // Varsayilan: Mevcut konumu koru
   return currentRoofPosition;
 }
+*/
 
 // Sera kapagini belirtilen pozisyona getir
+/*
 void setRoofPosition(int position, String reason) {
   // Pozisyon sinirlari (0-100%)
   if (position < 0) position = 0;
@@ -165,3 +173,4 @@ void setRoofPosition(int position, String reason) {
   lastRoofAction = millis();
   lastRoofReason = reason;
 }
+*/
