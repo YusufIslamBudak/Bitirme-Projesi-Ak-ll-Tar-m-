@@ -237,8 +237,16 @@ void Communication::sendToNodeMCU(const char* jsonString) {
   Serial.print(jsonSize);
   Serial.println(F(" byte"));
   
+  // BUFFER TEMİZLİĞİ: Önce RX buffer'ı boşalt
+  while (Serial2.available()) {
+    Serial2.read();
+  }
+  
   // JSON'ı Serial2'ye gönder (NodeMCU)
   Serial2.println(jsonString);
+  
+  // FLUSH: Gönderimin tamamlanmasını bekle (buffer boşalana kadar)
+  Serial2.flush();
   
   // Doğrulama
   Serial.println(F("[Serial2] JSON NodeMCU'ya gonderildi"));

@@ -157,6 +157,7 @@ const char* JSONFormatter::createCompactJSON(
 }
 
 // Firebase JSON (NodeMCU için - Detaylı ama optimize)
+// KEY İSİMLERİ: NodeMCU karar ağacıyla uyumlu kısa isimler!
 const char* JSONFormatter::createFirebaseJSON(
     float temp, float hum, float press, float gas,
     float lux, int co2, float soil,
@@ -168,26 +169,26 @@ const char* JSONFormatter::createFirebaseJSON(
     
     strcpy(jsonBuffer, "{");
     
-    // Sensör verileri (filtered)
-    appendKeyValue("temperature", temp, 2);
-    appendKeyValue("humidity", hum, 2);
-    appendKeyValue("pressure", press, 2);
-    appendKeyValue("gas", gas, 2);
-    appendKeyValue("light", lux, 1);
-    appendKeyValue("co2", co2);
-    appendKeyValue("soil_moisture", soil, 2);
+    // Sensör verileri (filtered) - KISA KEY İSİMLERİ
+    appendKeyValue("temp", temp, 2);      // temperature -> temp
+    appendKeyValue("hum", hum, 2);        // humidity -> hum
+    appendKeyValue("pres", press, 2);     // pressure -> pres
+    appendKeyValue("gas", gas, 2);        // gas (aynı)
+    appendKeyValue("lux", lux, 1);        // light -> lux (çakışma önlendi!)
+    appendKeyValue("co2", co2);           // co2 (aynı)
+    appendKeyValue("soil", soil, 2);      // soil_moisture -> soil
     
     // Hesaplanan değerler
-    appendKeyValue("dew_point", dew_point, 2);
-    appendKeyValue("heat_index", heat_index, 2);
+    appendKeyValue("dew", dew_point, 2);  // dew_point -> dew
+    appendKeyValue("heat", heat_index, 2); // heat_index -> heat
     
     // Kontrol durumları
-    appendKeyValue("roof_position", roof);
-    appendKeyValue("fan_active", fan);
-    appendKeyValue("light_active", light);
-    appendKeyValue("pump_active", pump);
+    appendKeyValue("roof", roof);          // roof_position -> roof
+    appendKeyValue("fan", fan);            // fan_active -> fan
+    appendKeyValue("light", light);        // light_active -> light (bool)
+    appendKeyValue("pump", pump);          // pump_active -> pump
     
-    // Timestamp (NodeMCU ekleyecek)
+    // Timestamp
     appendKeyValue("uptime", (int)uptime, true);  // Son eleman
     
     strcat(jsonBuffer, "}");
